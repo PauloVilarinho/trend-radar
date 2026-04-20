@@ -16,7 +16,7 @@ Source plan: `../2026-04-17-plan-1-foundation.md` (the master). This directory s
 | 2 | [Add core gems (Devise, Inertia, RSpec, tooling)](task-02-add-gems.md) | ✅ DONE (`94dc14c`) |
 | 3 | [Install and configure Devise](task-03-devise.md) | ✅ DONE (`d3ce7c9`) |
 | 4 | [Install Inertia.js + React](task-04-inertia-react.md) | ✅ DONE (`de1b91c`) |
-| 5 | [Configure TailwindCSS for Inertia pages](task-05-tailwind-config.md) | pending |
+| 5 | [Configure TailwindCSS + style Devise views](task-05-tailwind-config.md) | ✅ DONE (`fa6a4ba`) |
 | 6 | [Dashboard placeholder page + routes (TDD)](task-06-dashboard-page.md) | pending |
 | 7 | [Topic model with validations (TDD)](task-07-topic-model.md) | pending |
 | 8 | [PushSubscription model (TDD)](task-08-push-subscription-model.md) | pending |
