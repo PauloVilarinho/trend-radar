@@ -5,5 +5,18 @@
     "@vitejs/plugin-legacy": "^8.0.1",
     "vite": "^8.0.8",
     "vite-plugin-ruby": "^5.2.1"
+  },
+  "dependencies": {
+    "@inertiajs/react": "^3.0.3",
+    "@inertiajs/vite": "^3.0.3",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "typescript": "^6.0.2"
+  },
+  "scripts": {
+    "check": "tsc -p tsconfig.app.json && tsc -p tsconfig.node.json"
   }
 }

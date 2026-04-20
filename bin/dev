@@ -1,7 +1,17 @@
 #!/usr/bin/env sh
 
-# Default to port 3000 if not specified
 export PORT="${PORT:-3000}"
+
+if command -v overmind 1> /dev/null 2>&1
+then
+  exec overmind start -f Procfile.dev "$@"
+fi
+
+if command -v hivemind 1> /dev/null 2>&1
+then
+  echo "Hivemind is installed. Running the application with Hivemind..."
+  exec hivemind Procfile.dev "$@"
+fi
 
 # Let the debug gem allow remote connections,
 # but avoid loading until `debugger` is called

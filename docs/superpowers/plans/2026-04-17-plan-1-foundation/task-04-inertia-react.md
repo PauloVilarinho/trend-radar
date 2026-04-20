@@ -5,9 +5,11 @@
 
 ## Files
 
-- Create: `app/frontend/entrypoints/application.tsx`, `app/frontend/Layouts/AppLayout.tsx`
+- Create: `app/frontend/entrypoints/inertia.tsx` (generator name), `app/frontend/layouts/AppLayout.tsx`
 - Modify: `app/views/layouts/application.html.erb` (Inertia root), `app/controllers/application_controller.rb`
-- Create: `config/initializers/inertia_rails.rb` (if generator produces one)
+- Create: `config/initializers/inertia_rails.rb` (generator produces this)
+
+**Directory casing:** keep generator defaults — `app/frontend/pages/` and `app/frontend/layouts/` lowercase (consistent with Rails convention; generator-produced).
 
 ## Steps
 
@@ -23,13 +25,12 @@
 
 2. Verify the generator's scaffolding: `app/frontend/entrypoints/application.tsx`, `app/frontend/pages/` exists (will rename), `vite.config.ts` has the React plugin, `package.json` has `react`, `react-dom`, `@inertiajs/react`.
 
-3. Rename:
+3. Create the layouts directory:
    ```bash
-   git mv app/frontend/pages app/frontend/Pages
-   mkdir -p app/frontend/Layouts
+   mkdir -p app/frontend/layouts
    ```
 
-4. Create `app/frontend/Layouts/AppLayout.tsx`:
+4. Create `app/frontend/layouts/AppLayout.tsx`:
    ```tsx
    import { ReactNode } from "react";
    import { Link, usePage } from "@inertiajs/react";
@@ -70,15 +71,18 @@
    }
    ```
 
-5. Wire `AppLayout` as default in `app/frontend/entrypoints/application.tsx`. Replace the `resolve` function body:
+5. Wire `AppLayout` as default in `app/frontend/entrypoints/inertia.tsx`. Replace the generator's default body with a manual `resolve` that applies `AppLayout`:
    ```tsx
-   import AppLayout from "../Layouts/AppLayout";
+   import { createInertiaApp } from "@inertiajs/react";
+   import { createRoot } from "react-dom/client";
+   import type { ReactNode } from "react";
+   import AppLayout from "../layouts/AppLayout";
 
-   createInertiaApp({
+   void createInertiaApp({
      resolve: (name) => {
-       const pages = import.meta.glob("../Pages/**/*.tsx", { eager: true });
-       const page = pages[`../Pages/${name}.tsx`] as { default: React.FC & { layout?: unknown } };
-       page.default.layout ||= (page: React.ReactNode) => <AppLayout>{page}</AppLayout>;
+       const pages = import.meta.glob("../pages/**/*.tsx", { eager: true });
+       const page = pages[`../pages/${name}.tsx`] as { default: React.FC & { layout?: (node: ReactNode) => ReactNode } };
+       page.default.layout ||= (pageNode) => <AppLayout>{pageNode}</AppLayout>;
        return page;
      },
      setup({ el, App, props }) {
@@ -86,7 +90,6 @@
      },
    });
    ```
-   Keep the generator's existing imports for `createInertiaApp`, `createRoot`, `React`.
 
 6. Replace `app/controllers/application_controller.rb`:
    ```ruby
