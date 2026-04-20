@@ -36,8 +36,14 @@
 
   </head>
 
-  <body>
-    <main class="container mx-auto mt-28 px-5 flex">
+  <body class="min-h-screen bg-gray-50 text-gray-900">
+    <% if notice.present? %>
+      <div class="bg-green-50 border-b border-green-200 text-green-800 px-4 py-2 text-sm"><%= notice %></div>
+    <% end %>
+    <% if alert.present? %>
+      <div class="bg-red-50 border-b border-red-200 text-red-800 px-4 py-2 text-sm"><%= alert %></div>
+    <% end %>
+    <main class="container mx-auto max-w-6xl px-5 py-12">
       <%= yield %>
     </main>
   </body>
