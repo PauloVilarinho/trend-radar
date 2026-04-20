@@ -15,7 +15,7 @@ Source plan: `../2026-04-17-plan-1-foundation.md` (the master). This directory s
 | 1 | [Bootstrap Rails 8 app](task-01-bootstrap-rails.md) | ✅ DONE (`05aa5d3`) |
 | 2 | [Add core gems (Devise, Inertia, RSpec, tooling)](task-02-add-gems.md) | ✅ DONE (`94dc14c`) |
 | 3 | [Install and configure Devise](task-03-devise.md) | ✅ DONE (`d3ce7c9`) |
-| 4 | [Install Inertia.js + React](task-04-inertia-react.md) | pending |
+| 4 | [Install Inertia.js + React](task-04-inertia-react.md) | ✅ DONE (`de1b91c`) |
 | 5 | [Configure TailwindCSS for Inertia pages](task-05-tailwind-config.md) | pending |
 | 6 | [Dashboard placeholder page + routes (TDD)](task-06-dashboard-page.md) | pending |
 | 7 | [Topic model with validations (TDD)](task-07-topic-model.md) | pending |
