@@ -5,8 +5,10 @@
 
 ## Files
 
-- Create: `app/controllers/dashboard_controller.rb`, `app/frontend/Pages/Dashboard/Index.tsx`, `spec/requests/dashboard_spec.rb`
+- Create: `app/controllers/dashboard_controller.rb`, `app/frontend/pages/dashboard/index.tsx`, `spec/requests/dashboard_spec.rb`
 - Modify: `config/routes.rb`, `spec/rails_helper.rb` (Devise test helpers)
+
+**Naming deviation:** page path uses lowercase `dashboard/index` to match the existing `inertia_example/index` generator convention (and the Task 4 decision to keep `pages/` lowercase). Controller renders `inertia: "dashboard/index"`.
 
 ## Steps
 
