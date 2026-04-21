@@ -11,7 +11,7 @@ RSpec.describe Quality::CoverageParser do
   end
 
   it "returns nil branch coverage when SimpleCov did not record it" do
-    tmp = Tempfile.new(["last_run", ".json"])
+    tmp = Tempfile.new([ "last_run", ".json" ])
     tmp.write('{"result":{"line":88.0}}')
     tmp.close
 
