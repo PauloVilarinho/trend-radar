@@ -1,0 +1,23 @@
+# Quality gate thresholds — see docs/superpowers/specs/2026-04-21-code-quality-metrics-design.md
+#
+# `mutation.kill_ratio_min` is intentionally null on initial setup. The first
+# `bin/rake quality:mutation` run records the observed ratio into this file;
+# subsequent runs fail if the ratio drops below that floor.
+
+coverage:
+  line_min: 95.0
+  branch_min: 90.0
+
+flog:
+  method_max: 15
+  class_max: 40
+
+rubocop_metrics:
+  class_length_max: 100
+  method_length_max: 10
+  abc_size_max: 15
+  cyclomatic_complexity_max: 6
+  perceived_complexity_max: 7
+
+mutation:
+  kill_ratio_min: null
