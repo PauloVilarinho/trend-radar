@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Bootstrap a Rails 8 + Inertia/React + Devise application with Topic and PushSubscription models, working CRUD UI for topics, Kamal deployment config, and CI. Produces a working web app where users can sign up and manage topic subscriptions — no data ingestion yet.
+**2026-04-20 amendment:** topics flipped to a shared, admin-curated catalog. Per-user ownership moved to a `topic_subscriptions` join table. A `users.admin` boolean and a new `/admin/topics` namespace gate CRUD to admins; regular users only subscribe. Tasks 7–12 were redesigned; tasks 7b and 8b were inserted.
+
+**Goal:** Bootstrap a Rails 8 + Inertia/React + Devise application with a shared `Topic` catalog (admin-curated), a `TopicSubscription` join that carries per-user Discord webhooks, a `PushSubscription` model, Kamal deployment config, and CI. Produces a working web app where admins curate topics and regular users subscribe — no data ingestion yet.
 
 **Architecture:** Single Rails 8 monolith. Authentication via Devise with plain ERB views. Rest of app uses Inertia.js to render React pages from Rails controllers. PostgreSQL for data. SolidQueue for background jobs (used by later plans; configured here). Deploy via Kamal 2 to a single VPS.
 
@@ -23,19 +25,26 @@ New files created in this plan:
 | `config/initializers/inertia_rails.rb` | Inertia SSR/version config |
 | `config/deploy.yml` | Kamal deploy config |
 | `app/frontend/entrypoints/application.tsx` | Vite entrypoint, Inertia bootstrap |
-| `app/frontend/Layouts/AppLayout.tsx` | Shared React layout |
-| `app/frontend/Pages/Dashboard/Index.tsx` | Dashboard placeholder |
-| `app/frontend/Pages/Topics/Index.tsx` | Topics list page |
-| `app/frontend/Pages/Topics/New.tsx` | Topic create form |
-| `app/frontend/Pages/Topics/Edit.tsx` | Topic edit form |
-| `app/models/user.rb` | Devise User |
-| `app/models/topic.rb` | Topic with validations |
+| `app/frontend/layouts/AppLayout.tsx` | Shared React layout |
+| `app/frontend/pages/dashboard/index.tsx` | Dashboard placeholder |
+| `app/frontend/pages/topics/index.tsx` | Topics catalog (read-only) with inline subscription form |
+| `app/frontend/pages/admin/topics/index.tsx` | Admin catalog listing |
+| `app/frontend/pages/admin/topics/new.tsx` | Admin: new topic form |
+| `app/frontend/pages/admin/topics/edit.tsx` | Admin: edit topic form |
+| `app/models/user.rb` | Devise User with `admin` flag |
+| `app/models/topic.rb` | Topic (shared catalog, admin-curated) |
+| `app/models/topic_subscription.rb` | Per-user subscription join record |
 | `app/models/push_subscription.rb` | Push subscription record |
-| `app/controllers/application_controller.rb` | Base controller with Inertia helpers |
+| `app/controllers/application_controller.rb` | Base controller with Inertia helpers and `require_admin!` |
 | `app/controllers/dashboard_controller.rb` | Dashboard landing |
-| `app/controllers/topics_controller.rb` | Topics CRUD |
+| `app/controllers/topics_controller.rb` | Topics catalog (read-only index for regular users) |
+| `app/controllers/topic_subscriptions_controller.rb` | Subscribe / update / unsubscribe |
+| `app/controllers/admin/topics_controller.rb` | Admin topic CRUD (no destroy) |
+| `lib/tasks/admin.rake` | `rake admin:promote[email]` promotes a user |
 | `db/migrate/*_devise_create_users.rb` | Users table |
-| `db/migrate/*_create_topics.rb` | Topics table |
+| `db/migrate/*_add_admin_to_users.rb` | `admin` boolean on users |
+| `db/migrate/*_create_topics.rb` | Topics table (shared catalog) |
+| `db/migrate/*_create_topic_subscriptions.rb` | Per-user subscription join |
 | `db/migrate/*_create_push_subscriptions.rb` | Push subscriptions table |
 | `spec/rails_helper.rb`, `spec/spec_helper.rb` | RSpec config |
 | `spec/factories/*.rb` | FactoryBot factories |
@@ -226,7 +235,7 @@ git commit -m "feat: add devise user model and auth views"
 
 **Files:**
 - Create: `app/frontend/entrypoints/application.tsx`
-- Create: `app/frontend/Layouts/AppLayout.tsx`
+- Create: `app/frontend/layouts/AppLayout.tsx`
 - Create: `app/views/layouts/application.html.erb` (modify to host Inertia root)
 - Create: `config/initializers/inertia_rails.rb`
 
@@ -242,20 +251,19 @@ This generator installs npm packages (@inertiajs/react, react, react-dom, typesc
 
 Confirm these exist:
 - `app/frontend/entrypoints/application.tsx`
-- `app/frontend/pages/` (note lowercase — we'll rename to `Pages` for convention)
+- `app/frontend/pages/` (generator default; keep lowercase)
 - `vite.config.ts` has React plugin configured
 - `package.json` has `react`, `react-dom`, `@inertiajs/react`
 
-- [ ] **Step 3: Rename `pages/` → `Pages/` and `layouts/` → `Layouts/`**
+- [ ] **Step 3: Ensure `pages/` and `layouts/` exist (lowercase)**
 
 ```bash
-git mv app/frontend/pages app/frontend/Pages
-mkdir -p app/frontend/Layouts
+mkdir -p app/frontend/pages app/frontend/layouts
 ```
 
 - [ ] **Step 4: Create shared layout**
 
-Create `app/frontend/Layouts/AppLayout.tsx`:
+Create `app/frontend/layouts/AppLayout.tsx`:
 ```tsx
 import { ReactNode } from "react";
 import { Link, usePage } from "@inertiajs/react";
@@ -304,12 +312,12 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
 Edit `app/frontend/entrypoints/application.tsx` to use the layout by default. Replace the `resolve` function body with:
 ```tsx
-import AppLayout from "../Layouts/AppLayout";
+import AppLayout from "../layouts/AppLayout";
 
 createInertiaApp({
   resolve: (name) => {
-    const pages = import.meta.glob("../Pages/**/*.tsx", { eager: true });
-    const page = pages[`../Pages/${name}.tsx`] as { default: React.FC & { layout?: unknown } };
+    const pages = import.meta.glob("../pages/**/*.tsx", { eager: true });
+    const page = pages[`../pages/${name}.tsx`] as { default: React.FC & { layout?: unknown } };
     page.default.layout ||= (page: React.ReactNode) => <AppLayout>{page}</AppLayout>;
     return page;
   },
@@ -390,7 +398,7 @@ git commit -m "chore: configure tailwind to scan frontend/**"
 
 **Files:**
 - Create: `app/controllers/dashboard_controller.rb`
-- Create: `app/frontend/Pages/Dashboard/Index.tsx`
+- Create: `app/frontend/pages/dashboard/index.tsx`
 - Modify: `config/routes.rb`
 
 - [ ] **Step 1: Write failing request spec**
@@ -415,7 +423,7 @@ RSpec.describe "Dashboard", type: :request do
       it "renders the dashboard inertia page" do
         get "/"
         expect(response).to have_http_status(:ok)
-        expect(response.body).to include("Dashboard/Index")
+        expect(response.body).to include("dashboard/index")
       end
     end
   end
@@ -450,12 +458,12 @@ Create `app/controllers/dashboard_controller.rb`:
 ```ruby
 class DashboardController < ApplicationController
   def index
-    render inertia: "Dashboard/Index", props: {}
+    render inertia: "dashboard/index", props: {}
   end
 end
 ```
 
-Create `app/frontend/Pages/Dashboard/Index.tsx`:
+Create `app/frontend/pages/dashboard/index.tsx`:
 ```tsx
 import { Head } from "@inertiajs/react";
 
@@ -484,227 +492,23 @@ git commit -m "feat: add dashboard placeholder page at root"
 
 ---
 
-## Task 7: Topic model with validations (TDD)
+## Task 7: Topic model (shared catalog) with validations (TDD)
 
-**Files:**
-- Create: `db/migrate/*_create_topics.rb`
-- Create: `app/models/topic.rb`
-- Create: `spec/models/topic_spec.rb`
-- Create: `spec/factories/topics.rb`
+See [`2026-04-17-plan-1-foundation/task-07-topic-model.md`](2026-04-17-plan-1-foundation/task-07-topic-model.md) for the full step-by-step. Summary:
 
-- [ ] **Step 1: Write failing model spec**
+- `topics` is a **shared** table (no `user_id`). Column `created_by_id` (nullable fk users, `on_delete: nullify`) records the admin who added the row.
+- Columns: `created_by_id`, `name`, `keywords` (text[]), `active` (default true), timestamps. No `discord_webhook` column — per-user webhooks live on `topic_subscriptions`.
+- Index: `add_index :topics, "LOWER(name)", unique: true` (globally unique, case-insensitive).
+- Validations: name presence + uniqueness (case-insensitive), keywords ≥1 and ≤20, no blank keyword strings. **No** per-user cap on this model (lives on the subscription, Task 8b).
+- `User` gains `has_many :created_topics, class_name: "Topic", foreign_key: :created_by_id, dependent: :nullify`. No `has_many :topics`.
 
-Create `spec/models/topic_spec.rb`:
-```ruby
-require "rails_helper"
+## Task 7b: Add `admin` flag to users + `require_admin!` gate (TDD)
 
-RSpec.describe Topic, type: :model do
-  describe "validations" do
-    let(:user) { create(:user) }
+See [`2026-04-17-plan-1-foundation/task-07b-add-admin-to-users.md`](2026-04-17-plan-1-foundation/task-07b-add-admin-to-users.md). Summary:
 
-    it "is valid with minimum required attributes" do
-      topic = build(:topic, user: user)
-      expect(topic).to be_valid
-    end
-
-    it "requires a name" do
-      topic = build(:topic, name: nil)
-      expect(topic).not_to be_valid
-      expect(topic.errors[:name]).to be_present
-    end
-
-    it "requires a unique name per user" do
-      existing = create(:topic, user: user, name: "AI")
-      duplicate = build(:topic, user: user, name: "AI")
-      expect(duplicate).not_to be_valid
-    end
-
-    it "allows same name for different users" do
-      user2 = create(:user)
-      create(:topic, user: user, name: "AI")
-      other = build(:topic, user: user2, name: "AI")
-      expect(other).to be_valid
-    end
-
-    it "requires at least one keyword" do
-      topic = build(:topic, user: user, keywords: [])
-      expect(topic).not_to be_valid
-      expect(topic.errors[:keywords]).to be_present
-    end
-
-    it "rejects more than 20 keywords" do
-      topic = build(:topic, user: user, keywords: Array.new(21) { |i| "kw#{i}" })
-      expect(topic).not_to be_valid
-      expect(topic.errors[:keywords]).to include(/too many/i)
-    end
-
-    it "rejects blank keyword strings" do
-      topic = build(:topic, user: user, keywords: ["valid", "", "  "])
-      expect(topic).not_to be_valid
-    end
-
-    it "validates discord_webhook format when present" do
-      topic = build(:topic, user: user, discord_webhook: "https://example.com/webhook")
-      expect(topic).not_to be_valid
-      expect(topic.errors[:discord_webhook]).to be_present
-    end
-
-    it "accepts valid discord webhook URLs" do
-      topic = build(:topic, user: user, discord_webhook: "https://discord.com/api/webhooks/123/abc")
-      expect(topic).to be_valid
-    end
-
-    it "allows nil discord_webhook" do
-      topic = build(:topic, user: user, discord_webhook: nil)
-      expect(topic).to be_valid
-    end
-  end
-
-  describe "user topic limit" do
-    let(:user) { create(:user) }
-
-    it "rejects creating a 51st topic for a user" do
-      50.times { |i| create(:topic, user: user, name: "topic#{i}") }
-      over = build(:topic, user: user, name: "too_many")
-      expect(over).not_to be_valid
-      expect(over.errors[:base]).to include(/limit/i)
-    end
-  end
-end
-```
-
-- [ ] **Step 2: Create topic factory**
-
-Create `spec/factories/topics.rb`:
-```ruby
-FactoryBot.define do
-  factory :topic do
-    user
-    sequence(:name) { |n| "Topic #{n}" }
-    keywords { ["AI", "machine learning"] }
-    discord_webhook { nil }
-    active { true }
-  end
-end
-```
-
-- [ ] **Step 3: Run tests — expect FAIL**
-
-Run: `bin/rspec spec/models/topic_spec.rb`
-Expected: FAIL — `Topic` not defined.
-
-- [ ] **Step 4: Generate migration and model**
-
-```bash
-bin/rails generate migration CreateTopics user:references name:string keywords:text discord_webhook:string active:boolean
-```
-
-Edit the generated migration:
-```ruby
-class CreateTopics < ActiveRecord::Migration[8.0]
-  def change
-    create_table :topics do |t|
-      t.references :user, null: false, foreign_key: true
-      t.string :name, null: false
-      t.text :keywords, array: true, null: false, default: []
-      t.string :discord_webhook
-      t.boolean :active, null: false, default: true
-      t.timestamps
-    end
-    add_index :topics, [:user_id, :name], unique: true
-  end
-end
-```
-
-Run: `bin/rails db:migrate`
-
-- [ ] **Step 5: Implement model**
-
-Create `app/models/topic.rb`:
-```ruby
-class Topic < ApplicationRecord
-  belongs_to :user
-
-  MAX_KEYWORDS = 20
-  MAX_TOPICS_PER_USER = 50
-  DISCORD_WEBHOOK_REGEX = %r{\Ahttps://(?:discord\.com|discordapp\.com)/api/webhooks/\d+/[\w-]+\z}
-
-  validates :name, presence: true, uniqueness: { scope: :user_id }
-  validates :keywords, presence: true
-  validate :validate_keywords
-  validate :validate_discord_webhook
-  validate :validate_user_topic_limit, on: :create
-
-  encrypts :discord_webhook if respond_to?(:encrypts)
-
-  private
-
-  def validate_keywords
-    return unless keywords.is_a?(Array)
-
-    if keywords.empty? || keywords.all? { |k| k.to_s.strip.empty? }
-      errors.add(:keywords, "must have at least one non-blank entry")
-    end
-
-    if keywords.any? { |k| k.to_s.strip.empty? }
-      errors.add(:keywords, "contains blank entries")
-    end
-
-    if keywords.length > MAX_KEYWORDS
-      errors.add(:keywords, "too many (max #{MAX_KEYWORDS})")
-    end
-  end
-
-  def validate_discord_webhook
-    return if discord_webhook.blank?
-    return if DISCORD_WEBHOOK_REGEX.match?(discord_webhook)
-
-    errors.add(:discord_webhook, "must be a valid Discord webhook URL")
-  end
-
-  def validate_user_topic_limit
-    return unless user
-
-    if user.topics.count >= MAX_TOPICS_PER_USER
-      errors.add(:base, "topic limit of #{MAX_TOPICS_PER_USER} reached")
-    end
-  end
-end
-```
-
-Add `has_many :topics` to `User`:
-Edit `app/models/user.rb`:
-```ruby
-class User < ApplicationRecord
-  devise :database_authenticatable, :registerable,
-         :recoverable, :rememberable, :validatable
-  has_many :topics, dependent: :destroy
-end
-```
-
-- [ ] **Step 6: Set up Rails encryption key (needed for `encrypts`)**
-
-Run:
-```bash
-bin/rails db:encryption:init
-```
-Copy the output into `config/credentials.yml.enc` via:
-```bash
-EDITOR=vim bin/rails credentials:edit
-```
-Paste the active_record_encryption block from step output, save, close.
-
-- [ ] **Step 7: Run tests — expect PASS**
-
-Run: `bin/rspec spec/models/topic_spec.rb`
-Expected: all examples PASS.
-
-- [ ] **Step 8: Commit**
-
-```bash
-git add -A
-git commit -m "feat: add Topic model with validations and keyword array"
-```
+- Migration: `add_column :users, :admin, :boolean, null: false, default: false`.
+- `lib/tasks/admin.rake` adds `rake admin:promote[email]`.
+- `ApplicationController#require_admin!` redirects non-admins to root with an "Admins only." alert; the shared `inertia_share` exposes `current_user.admin` so the layout can render the admin nav link.
 
 ---
 
@@ -816,10 +620,18 @@ Add `has_many :push_subscriptions, dependent: :destroy` to `User`:
 class User < ApplicationRecord
   devise :database_authenticatable, :registerable,
          :recoverable, :rememberable, :validatable
-  has_many :topics, dependent: :destroy
+
+  has_many :created_topics,
+           class_name: "Topic",
+           foreign_key: :created_by_id,
+           dependent: :nullify
+  has_many :topic_subscriptions, dependent: :destroy
+  has_many :subscribed_topics, through: :topic_subscriptions, source: :topic
   has_many :push_subscriptions, dependent: :destroy
 end
 ```
+
+(The `topic_subscriptions` / `subscribed_topics` associations are wired in Task 8b; listed here for the complete User shape at end-of-Plan-1.)
 
 - [ ] **Step 6: Run tests — expect PASS**
 
@@ -835,597 +647,58 @@ git commit -m "feat: add PushSubscription model"
 
 ---
 
-## Task 9: Topics index page (list user's topics)
+## Task 8b: TopicSubscription join model (TDD)
 
-**Files:**
-- Modify: `config/routes.rb`
-- Create: `app/controllers/topics_controller.rb`
-- Create: `app/frontend/Pages/Topics/Index.tsx`
-- Create: `spec/requests/topics_spec.rb`
+See [`2026-04-17-plan-1-foundation/task-08b-topic-subscription-model.md`](2026-04-17-plan-1-foundation/task-08b-topic-subscription-model.md). Summary:
 
-- [ ] **Step 1: Write failing request spec**
+- Migration creates `topic_subscriptions (user_id, topic_id, discord_webhook, active, timestamps)` with cascade deletes on both fks and a unique `(user_id, topic_id)` index.
+- Model: `belongs_to :user`, `belongs_to :topic`, `encrypts :discord_webhook`, webhook format validation, 50-subscriptions-per-user cap.
+- `User` adds `has_many :topic_subscriptions` + `has_many :subscribed_topics, through: ..., source: :topic`.
+- `Topic` adds `has_many :topic_subscriptions` + `has_many :subscribers, through: ..., source: :user`.
 
-Create `spec/requests/topics_spec.rb`:
-```ruby
-require "rails_helper"
+## Task 9: Topics catalog index page (read-only)
 
-RSpec.describe "Topics", type: :request do
-  let(:user) { create(:user) }
+See [`2026-04-17-plan-1-foundation/task-09-topics-index.md`](2026-04-17-plan-1-foundation/task-09-topics-index.md). Summary:
 
-  describe "GET /topics" do
-    context "unauthenticated" do
-      it "redirects to sign in" do
-        get "/topics"
-        expect(response).to redirect_to(new_user_session_path)
-      end
-    end
-
-    context "authenticated" do
-      before { sign_in user }
-
-      it "renders the topics index with user's topics only" do
-        own = create(:topic, user: user, name: "Mine")
-        create(:topic, name: "NotMine")
-
-        get "/topics"
-
-        expect(response).to have_http_status(:ok)
-        expect(response.body).to include("Topics/Index")
-        expect(response.body).to include("Mine")
-        expect(response.body).not_to include("NotMine")
-      end
-    end
-  end
-end
-```
-
-- [ ] **Step 2: Run — expect FAIL**
-
-Run: `bin/rspec spec/requests/topics_spec.rb`
-Expected: FAIL — no route.
-
-- [ ] **Step 3: Route**
-
-Edit `config/routes.rb`:
-```ruby
-Rails.application.routes.draw do
-  devise_for :users
-  root to: "dashboard#index"
-  resources :topics
-  get "up" => "rails/health#show", as: :rails_health_check
-end
-```
-
-- [ ] **Step 4: Controller (index only for now)**
-
-Create `app/controllers/topics_controller.rb`:
-```ruby
-class TopicsController < ApplicationController
-  def index
-    topics = current_user.topics.order(created_at: :desc)
-    render inertia: "Topics/Index", props: {
-      topics: topics.map { |t| topic_props(t) }
-    }
+- Routes:
+  ```ruby
+  resources :topics, only: [:index] do
+    resource :subscription, only: [:create, :update, :destroy],
+                            controller: "topic_subscriptions"
   end
 
-  private
-
-  def topic_props(topic)
-    {
-      id: topic.id,
-      name: topic.name,
-      keywords: topic.keywords,
-      active: topic.active,
-      has_discord: topic.discord_webhook.present?,
-    }
+  namespace :admin do
+    root "topics#index"
+    resources :topics, except: [:destroy, :show]
   end
-end
-```
+  ```
+- `TopicsController#index` — lists `Topic.active.order(:name)` with each row's subscription state for `current_user`.
+- `pages/topics/index.tsx` — each row shows a Subscribe button if unsubscribed, or an inline form (discord webhook + active checkbox + unsubscribe button) if subscribed. No `topics/new` / `topics/edit` pages under `/topics` — those live under `/admin/topics` (Task 11).
 
-- [ ] **Step 5: Page**
+## Task 10: TopicSubscription flow (subscribe / update / unsubscribe)
 
-Create `app/frontend/Pages/Topics/Index.tsx`:
-```tsx
-import { Head, Link } from "@inertiajs/react";
+See [`2026-04-17-plan-1-foundation/task-10-topic-subscription-flow.md`](2026-04-17-plan-1-foundation/task-10-topic-subscription-flow.md). Summary:
 
-type Topic = {
-  id: number;
-  name: string;
-  keywords: string[];
-  active: boolean;
-  has_discord: boolean;
-};
+- `TopicSubscriptionsController#create` — `find_or_initialize_by(topic:)` → save. Idempotent; enforces the 50-cap; redirects back to `/topics`.
+- `#update` — permits `discord_webhook` and `active`. Uses `status: :unprocessable_content` on validation failure (Rails 8 naming).
+- `#destroy` — removes the subscription.
 
-export default function Index({ topics }: { topics: Topic[] }) {
-  return (
-    <>
-      <Head title="Topics" />
-      <div className="flex justify-between items-center mb-4">
-        <h1 className="text-2xl font-semibold">Topics</h1>
-        <Link
-          href="/topics/new"
-          className="bg-blue-600 text-white px-3 py-1.5 rounded text-sm"
-        >
-          New topic
-        </Link>
-      </div>
-      {topics.length === 0 ? (
-        <p className="text-gray-600">No topics yet. Create one to start monitoring.</p>
-      ) : (
-        <ul className="bg-white rounded border border-gray-200 divide-y">
-          {topics.map((t) => (
-            <li key={t.id} className="p-3 flex justify-between items-center">
-              <div>
-                <div className="font-medium">{t.name}</div>
-                <div className="text-xs text-gray-500">
-                  {t.keywords.join(", ")}
-                  {t.has_discord && " · Discord"}
-                  {!t.active && " · paused"}
-                </div>
-              </div>
-              <Link href={`/topics/${t.id}/edit`} className="text-blue-600 text-sm">Edit</Link>
-            </li>
-          ))}
-        </ul>
-      )}
-    </>
-  );
-}
-```
+## Task 11: Admin topic CRUD (`Admin::TopicsController`)
 
-- [ ] **Step 6: Run test — expect PASS**
+See [`2026-04-17-plan-1-foundation/task-11-topic-edit.md`](2026-04-17-plan-1-foundation/task-11-topic-edit.md). Summary:
 
-Run: `bin/rspec spec/requests/topics_spec.rb`
-Expected: PASS.
+- `before_action :require_admin!`.
+- Actions: `index`, `new`, `create`, `edit`, `update`. No `destroy` (soft-disable via `active: false`).
+- On create, assigns `created_by: current_user`.
+- Pages: `pages/admin/topics/{index,new,edit}.tsx` (all lowercase).
 
-- [ ] **Step 7: Commit**
+## Task 12: AppLayout admin nav link
 
-```bash
-git add -A
-git commit -m "feat: add topics index page"
-```
+See [`2026-04-17-plan-1-foundation/task-12-topic-destroy.md`](2026-04-17-plan-1-foundation/task-12-topic-destroy.md) (file name kept for stability; content is now the AppLayout nav link task). Summary:
 
----
+- `app/frontend/layouts/AppLayout.tsx` renders `<Link href="/admin/topics">Admin</Link>` when `current_user.admin`. The admin flag is already on `current_user` via `inertia_share` (Task 7b).
 
-## Task 10: Topic create flow (new + create)
-
-**Files:**
-- Modify: `app/controllers/topics_controller.rb`
-- Create: `app/frontend/Pages/Topics/New.tsx`
-- Modify: `spec/requests/topics_spec.rb`
-
-- [ ] **Step 1: Append failing specs for new/create**
-
-Append to `spec/requests/topics_spec.rb`, inside the main describe:
-```ruby
-  describe "GET /topics/new" do
-    before { sign_in user }
-
-    it "renders the new topic form" do
-      get "/topics/new"
-      expect(response).to have_http_status(:ok)
-      expect(response.body).to include("Topics/New")
-    end
-  end
-
-  describe "POST /topics" do
-    before { sign_in user }
-
-    context "with valid params" do
-      it "creates a topic and redirects to index" do
-        expect {
-          post "/topics", params: {
-            topic: { name: "Rust", keywords: ["rust lang", "cargo"], discord_webhook: "" }
-          }
-        }.to change(Topic, :count).by(1)
-        expect(response).to redirect_to(topics_path)
-      end
-    end
-
-    context "with invalid params" do
-      it "renders new with errors" do
-        post "/topics", params: { topic: { name: "", keywords: [] } }
-        expect(response).to have_http_status(:unprocessable_entity)
-        expect(response.body).to include("Topics/New")
-      end
-    end
-  end
-```
-
-- [ ] **Step 2: Run — expect FAIL**
-
-Run: `bin/rspec spec/requests/topics_spec.rb`
-Expected: specs for new/create fail.
-
-- [ ] **Step 3: Extend controller**
-
-Edit `app/controllers/topics_controller.rb`:
-```ruby
-class TopicsController < ApplicationController
-  before_action :set_topic, only: [:edit, :update, :destroy]
-
-  def index
-    topics = current_user.topics.order(created_at: :desc)
-    render inertia: "Topics/Index", props: {
-      topics: topics.map { |t| topic_props(t) }
-    }
-  end
-
-  def new
-    render inertia: "Topics/New", props: {
-      topic: empty_topic_form,
-      errors: {},
-    }
-  end
-
-  def create
-    topic = current_user.topics.build(topic_params)
-    if topic.save
-      redirect_to topics_path, notice: "Topic created."
-    else
-      render inertia: "Topics/New", props: {
-        topic: topic.attributes.slice("name", "keywords", "discord_webhook", "active"),
-        errors: topic.errors.to_hash,
-      }, status: :unprocessable_entity
-    end
-  end
-
-  private
-
-  def set_topic
-    @topic = current_user.topics.find(params[:id])
-  end
-
-  def topic_params
-    params.require(:topic).permit(:name, :discord_webhook, :active, keywords: [])
-  end
-
-  def topic_props(topic)
-    {
-      id: topic.id,
-      name: topic.name,
-      keywords: topic.keywords,
-      active: topic.active,
-      has_discord: topic.discord_webhook.present?,
-    }
-  end
-
-  def empty_topic_form
-    { name: "", keywords: [], discord_webhook: "", active: true }
-  end
-end
-```
-
-- [ ] **Step 4: Create New page**
-
-Create `app/frontend/Pages/Topics/New.tsx`:
-```tsx
-import { Head, useForm } from "@inertiajs/react";
-import { FormEvent } from "react";
-
-type Form = { name: string; keywords: string[]; discord_webhook: string; active: boolean };
-type Props = { topic: Form; errors: Record<string, string[]> };
-
-export default function New({ topic, errors }: Props) {
-  const form = useForm<Form>({
-    name: topic.name,
-    keywords: topic.keywords,
-    discord_webhook: topic.discord_webhook,
-    active: topic.active ?? true,
-  });
-
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    form.post("/topics");
-  };
-
-  const setKeywordsFromString = (s: string) => {
-    form.setData("keywords", s.split(",").map((k) => k.trim()).filter(Boolean));
-  };
-
-  return (
-    <>
-      <Head title="New topic" />
-      <h1 className="text-2xl font-semibold mb-4">New topic</h1>
-      <form onSubmit={submit} className="max-w-lg space-y-4 bg-white p-4 rounded border">
-        <Field label="Name" error={errors.name}>
-          <input
-            className="border rounded px-2 py-1 w-full"
-            value={form.data.name}
-            onChange={(e) => form.setData("name", e.target.value)}
-          />
-        </Field>
-        <Field label="Keywords (comma-separated)" error={errors.keywords}>
-          <input
-            className="border rounded px-2 py-1 w-full"
-            defaultValue={form.data.keywords.join(", ")}
-            onBlur={(e) => setKeywordsFromString(e.target.value)}
-          />
-        </Field>
-        <Field label="Discord webhook URL (optional)" error={errors.discord_webhook}>
-          <input
-            className="border rounded px-2 py-1 w-full"
-            value={form.data.discord_webhook}
-            onChange={(e) => form.setData("discord_webhook", e.target.value)}
-          />
-        </Field>
-        <button
-          type="submit"
-          disabled={form.processing}
-          className="bg-blue-600 text-white px-3 py-1.5 rounded text-sm"
-        >
-          Create
-        </button>
-      </form>
-    </>
-  );
-}
-
-function Field({ label, error, children }: { label: string; error?: string[]; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="text-sm font-medium">{label}</span>
-      <div className="mt-1">{children}</div>
-      {error && <div className="text-red-600 text-xs mt-1">{error.join(", ")}</div>}
-    </label>
-  );
-}
-```
-
-- [ ] **Step 5: Run tests — expect PASS**
-
-Run: `bin/rspec spec/requests/topics_spec.rb`
-Expected: all PASS.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add -A
-git commit -m "feat: add topic new/create flow"
-```
-
----
-
-## Task 11: Topic edit + update flow
-
-**Files:**
-- Modify: `app/controllers/topics_controller.rb`
-- Create: `app/frontend/Pages/Topics/Edit.tsx`
-- Modify: `spec/requests/topics_spec.rb`
-
-- [ ] **Step 1: Append failing specs**
-
-Append to `spec/requests/topics_spec.rb`:
-```ruby
-  describe "GET /topics/:id/edit" do
-    let!(:topic) { create(:topic, user: user) }
-    before { sign_in user }
-
-    it "renders edit for own topic" do
-      get "/topics/#{topic.id}/edit"
-      expect(response).to have_http_status(:ok)
-      expect(response.body).to include("Topics/Edit")
-    end
-
-    it "404s for other user's topic" do
-      other = create(:topic)
-      expect { get "/topics/#{other.id}/edit" }.to raise_error(ActiveRecord::RecordNotFound)
-    end
-  end
-
-  describe "PATCH /topics/:id" do
-    let!(:topic) { create(:topic, user: user, name: "Old") }
-    before { sign_in user }
-
-    it "updates valid params" do
-      patch "/topics/#{topic.id}", params: { topic: { name: "New", keywords: ["a", "b"] } }
-      expect(topic.reload.name).to eq("New")
-      expect(response).to redirect_to(topics_path)
-    end
-
-    it "re-renders edit on invalid" do
-      patch "/topics/#{topic.id}", params: { topic: { name: "", keywords: [] } }
-      expect(response).to have_http_status(:unprocessable_entity)
-      expect(response.body).to include("Topics/Edit")
-    end
-  end
-```
-
-- [ ] **Step 2: Run — expect FAIL**
-
-Run: `bin/rspec spec/requests/topics_spec.rb`
-Expected: new specs fail.
-
-- [ ] **Step 3: Extend controller**
-
-Edit `app/controllers/topics_controller.rb`, add `edit` and `update` actions (place between `create` and `private`):
-```ruby
-  def edit
-    render inertia: "Topics/Edit", props: {
-      topic: full_topic_form(@topic),
-      errors: {},
-    }
-  end
-
-  def update
-    if @topic.update(topic_params)
-      redirect_to topics_path, notice: "Topic updated."
-    else
-      render inertia: "Topics/Edit", props: {
-        topic: full_topic_form(@topic),
-        errors: @topic.errors.to_hash,
-      }, status: :unprocessable_entity
-    end
-  end
-```
-
-Add helper (in the private section):
-```ruby
-  def full_topic_form(topic)
-    {
-      id: topic.id,
-      name: topic.name,
-      keywords: topic.keywords,
-      discord_webhook: topic.discord_webhook || "",
-      active: topic.active,
-    }
-  end
-```
-
-- [ ] **Step 4: Create Edit page**
-
-Create `app/frontend/Pages/Topics/Edit.tsx`:
-```tsx
-import { Head, useForm } from "@inertiajs/react";
-import { FormEvent } from "react";
-
-type Form = { id: number; name: string; keywords: string[]; discord_webhook: string; active: boolean };
-type Props = { topic: Form; errors: Record<string, string[]> };
-
-export default function Edit({ topic, errors }: Props) {
-  const form = useForm<Omit<Form, "id">>({
-    name: topic.name,
-    keywords: topic.keywords,
-    discord_webhook: topic.discord_webhook,
-    active: topic.active,
-  });
-
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    form.patch(`/topics/${topic.id}`);
-  };
-
-  const setKeywordsFromString = (s: string) => {
-    form.setData("keywords", s.split(",").map((k) => k.trim()).filter(Boolean));
-  };
-
-  const destroy = () => {
-    if (confirm("Delete this topic?")) {
-      form.delete(`/topics/${topic.id}`);
-    }
-  };
-
-  return (
-    <>
-      <Head title={`Edit: ${topic.name}`} />
-      <h1 className="text-2xl font-semibold mb-4">Edit topic</h1>
-      <form onSubmit={submit} className="max-w-lg space-y-4 bg-white p-4 rounded border">
-        <Field label="Name" error={errors.name}>
-          <input
-            className="border rounded px-2 py-1 w-full"
-            value={form.data.name}
-            onChange={(e) => form.setData("name", e.target.value)}
-          />
-        </Field>
-        <Field label="Keywords (comma-separated)" error={errors.keywords}>
-          <input
-            className="border rounded px-2 py-1 w-full"
-            defaultValue={form.data.keywords.join(", ")}
-            onBlur={(e) => setKeywordsFromString(e.target.value)}
-          />
-        </Field>
-        <Field label="Discord webhook URL (optional)" error={errors.discord_webhook}>
-          <input
-            className="border rounded px-2 py-1 w-full"
-            value={form.data.discord_webhook}
-            onChange={(e) => form.setData("discord_webhook", e.target.value)}
-          />
-        </Field>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={form.data.active}
-            onChange={(e) => form.setData("active", e.target.checked)}
-          />
-          Active (receive notifications)
-        </label>
-        <div className="flex gap-2">
-          <button type="submit" disabled={form.processing} className="bg-blue-600 text-white px-3 py-1.5 rounded text-sm">
-            Save
-          </button>
-          <button type="button" onClick={destroy} className="bg-red-600 text-white px-3 py-1.5 rounded text-sm">
-            Delete
-          </button>
-        </div>
-      </form>
-    </>
-  );
-}
-
-function Field({ label, error, children }: { label: string; error?: string[]; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="text-sm font-medium">{label}</span>
-      <div className="mt-1">{children}</div>
-      {error && <div className="text-red-600 text-xs mt-1">{error.join(", ")}</div>}
-    </label>
-  );
-}
-```
-
-- [ ] **Step 5: Run tests — expect PASS**
-
-Run: `bin/rspec spec/requests/topics_spec.rb`
-Expected: all PASS.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add -A
-git commit -m "feat: add topic edit/update flow"
-```
-
----
-
-## Task 12: Topic destroy
-
-**Files:**
-- Modify: `app/controllers/topics_controller.rb`
-- Modify: `spec/requests/topics_spec.rb`
-
-- [ ] **Step 1: Append failing spec**
-
-Append to `spec/requests/topics_spec.rb`:
-```ruby
-  describe "DELETE /topics/:id" do
-    let!(:topic) { create(:topic, user: user) }
-    before { sign_in user }
-
-    it "deletes own topic" do
-      expect {
-        delete "/topics/#{topic.id}"
-      }.to change(Topic, :count).by(-1)
-      expect(response).to redirect_to(topics_path)
-    end
-  end
-```
-
-- [ ] **Step 2: Run — expect FAIL**
-
-Run: `bin/rspec spec/requests/topics_spec.rb`
-Expected: fail — no destroy action.
-
-- [ ] **Step 3: Add destroy action**
-
-Edit `app/controllers/topics_controller.rb`, add between `update` and `private`:
-```ruby
-  def destroy
-    @topic.destroy
-    redirect_to topics_path, notice: "Topic deleted."
-  end
-```
-
-- [ ] **Step 4: Run test — expect PASS**
-
-Run: `bin/rspec spec/requests/topics_spec.rb`
-Expected: all PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add -A
-git commit -m "feat: add topic destroy"
-```
+> **Note (2026-04-20 amendment):** Tasks 9–12's previous inline step-by-step bodies (per-user Topics CRUD) were removed when the design shifted to the shared catalog + subscription model. Recover the pre-amendment text from git history if needed; the linked per-task files are authoritative.
 
 ---
 
@@ -1646,106 +919,52 @@ git commit -m "ci: add github actions workflow for rspec + vite build"
 
 ## Task 16: Seed data for manual verification
 
-**Files:**
-- Modify: `db/seeds.rb`
+See [`2026-04-17-plan-1-foundation/task-16-seeds.md`](2026-04-17-plan-1-foundation/task-16-seeds.md). Summary:
 
-- [ ] **Step 1: Add dev seeds**
-
-Edit `db/seeds.rb`:
 ```ruby
 if Rails.env.development?
+  admin = User.find_or_create_by!(email: "admin@example.com") do |u|
+    u.password = "password123"
+    u.password_confirmation = "password123"
+  end
+  admin.update!(admin: true) unless admin.admin?
+
   user = User.find_or_create_by!(email: "dev@example.com") do |u|
     u.password = "password123"
     u.password_confirmation = "password123"
   end
 
-  Topic.find_or_create_by!(user: user, name: "AI agents") do |t|
+  ai = Topic.find_or_create_by!(name: "AI agents") do |t|
     t.keywords = ["AI agent", "LLM agent", "agentic", "autonomous agent"]
     t.active = true
+    t.created_by = admin
   end
 
-  Topic.find_or_create_by!(user: user, name: "Rust") do |t|
+  Topic.find_or_create_by!(name: "Rust") do |t|
     t.keywords = ["rust lang", "rustlang", "cargo"]
     t.active = true
+    t.created_by = admin
   end
 
-  puts "Seed user: dev@example.com / password123"
+  TopicSubscription.find_or_create_by!(user: user, topic: ai) do |s|
+    s.active = true
+  end
 end
 ```
 
-- [ ] **Step 2: Run seeds and verify**
-
-```bash
-bin/rails db:seed
-bin/rails server
-# open http://localhost:3000/users/sign_in, log in as dev@example.com
-# expected: dashboard loads, /topics shows 2 seeded topics
-```
-
-Stop the server.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add -A
-git commit -m "chore: add dev seed data (user + 2 sample topics)"
-```
+Run `bin/rails db:seed`; commit.
 
 ---
 
-## Task 17: Integration smoke — full happy path (system test)
+## Task 17: Integration smoke — admin + subscription happy path (system test)
 
-**Files:**
-- Create: `spec/system/topic_management_spec.rb`
+See [`2026-04-17-plan-1-foundation/task-17-system-test.md`](2026-04-17-plan-1-foundation/task-17-system-test.md). Summary:
 
-- [ ] **Step 1: Write system test**
-
-Create `spec/system/topic_management_spec.rb`:
-```ruby
-require "rails_helper"
-
-RSpec.describe "Topic management", type: :system do
-  before do
-    driven_by(:rack_test)  # headless, no JS — sufficient for Inertia's initial page render
-  end
-
-  let(:user) { create(:user) }
-
-  it "allows a user to create, edit, and delete a topic" do
-    sign_in user
-
-    visit "/topics"
-    expect(page).to have_content("No topics yet")
-
-    # Note: with rack_test we can't fully exercise Inertia client-side updates;
-    # we hit the HTTP endpoints directly to verify the server side works end-to-end.
-    page.driver.post "/topics", topic: { name: "AI", keywords: ["AI", "LLM"] }
-    expect(Topic.count).to eq(1)
-
-    visit "/topics"
-    expect(page).to have_content("AI")
-
-    topic = Topic.first
-    page.driver.patch "/topics/#{topic.id}", topic: { name: "AI agents", keywords: ["AI", "LLM", "agent"] }
-    expect(topic.reload.name).to eq("AI agents")
-
-    page.driver.delete "/topics/#{topic.id}"
-    expect(Topic.count).to eq(0)
-  end
-end
-```
-
-- [ ] **Step 2: Run — expect PASS**
-
-Run: `bin/rspec spec/system/topic_management_spec.rb`
-Expected: PASS.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add -A
-git commit -m "test: add system smoke test for topic management"
-```
+- `spec/system/happy_path_spec.rb` drives `rack_test`:
+  1. Admin signs in → `POST /admin/topics` creates a topic.
+  2. Regular user signs in → `POST /topics/:topic_id/subscription` subscribes.
+  3. If `Story`/`Match` are defined (Plan 2), seed a match and assert it appears on dashboard.
+  4. `DELETE /topics/:topic_id/subscription` unsubscribes.
 
 ---
 
@@ -1755,8 +974,10 @@ At the end of Plan 1 the app should:
 
 - Boot locally (`bin/rails server` + `bin/vite dev`).
 - Let a user sign up, log in, and sign out via Devise ERB views.
-- Let a signed-in user view their topics list, create, edit, and delete topics.
-- Reject invalid topic data with inline error messages.
+- Let an admin curate the shared `Topic` catalog at `/admin/topics` (CRUD minus destroy).
+- Let regular users browse `/topics`, subscribe, set a per-subscription Discord webhook, pause, or unsubscribe.
+- Gate `/admin/topics` behind `require_admin!` — non-admins redirected to root with an "Admins only." flash.
+- Show an "Admin" nav link only when `current_user.admin`.
 - Have SolidQueue installed and ready (no jobs yet).
 - Have a Kamal config ready to deploy (IP/domain fill-in required).
 - Pass `bin/rspec` (all model, request, system tests green).

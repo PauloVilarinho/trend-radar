@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deliver matches to users via two fast channels — browser Web Push notifications and per-topic Discord webhooks — with idempotency, failure logging, and failure surfacing in the topic settings page. Completes the MVP.
+**2026-04-20 amendment:** `NotifyJob` now fans out per `TopicSubscription` (not per topic owner). The `notifications` table gains `target_type` + `target_id`; uniqueness is `(match_id, channel, target_type, target_id)`. The "last Discord failure" banner moves from `pages/topics/edit.tsx` (which no longer exists for regular users) to the inline subscription form on `pages/topics/index.tsx`.
 
-**Architecture:** `NotifyJob` fans a `Match` out to the user's active push subscriptions (via VAPID Web Push) and to the topic's configured Discord webhook. Each send creates a `notifications` row for idempotency and audit. Failed Discord deliveries are visible in the topic edit page. The frontend ships a service worker and a "Enable notifications" UI in the dashboard to capture `PushSubscription` objects.
+**Goal:** Deliver matches to subscribers via two fast channels — browser Web Push and per-subscription Discord webhooks — with idempotency, failure logging, and failure surfacing on the topics catalog page. Completes the MVP.
+
+**Architecture:** `NotifyJob` loads a `Match` + its topic + all active `topic_subscriptions`, then for each subscriber dispatches one delivery per push_subscription (Web Push) and one delivery per subscription (Discord, if `discord_webhook` is present). Each send creates a `notifications` row for idempotency and audit. Failed Discord deliveries surface on the subscription's row in `pages/topics/index.tsx`. The frontend ships a service worker and a "Enable notifications" UI in the dashboard to capture `PushSubscription` objects.
 
 **Tech Stack:** `web-push` gem (Ruby), VAPID keys, browser Service Worker API, Faraday (for Discord POSTs — already added in Plan 2), RSpec + WebMock.
 
@@ -34,9 +36,9 @@ Files modified:
 
 | File | Change |
 |---|---|
-| `app/controllers/topics_controller.rb` | Expose last-delivery failure on edit |
-| `app/frontend/Pages/Topics/Edit.tsx` | Show last failure banner |
-| `app/frontend/Pages/Dashboard/Index.tsx` | Add PushToggle |
+| `app/controllers/topics_controller.rb` | Expose each subscription's last Discord failure in the catalog index props |
+| `app/frontend/pages/topics/index.tsx` | Show last Discord failure banner inline above each subscription form |
+| `app/frontend/pages/dashboard/index.tsx` | Add PushToggle |
 | `app/controllers/application_controller.rb` | Shared props include VAPID public key |
 
 ---
@@ -103,11 +105,15 @@ end
 
 - [ ] **Step 5: Expose public key to frontend via shared Inertia props**
 
-Edit `app/controllers/application_controller.rb`, extend `inertia_share`:
+Edit `app/controllers/application_controller.rb`, extend `inertia_share` (the `admin` key was added in Plan 1 Task 7b):
 ```ruby
   inertia_share do
     {
-      current_user: current_user && { id: current_user.id, email: current_user.email },
+      current_user: current_user && {
+        id: current_user.id,
+        email: current_user.email,
+        admin: current_user.admin,
+      },
       flash: { notice: flash[:notice], alert: flash[:alert] }.compact,
       vapid_public_key: Rails.configuration.x.web_push.public_key,
     }
@@ -209,7 +215,7 @@ class PushSubscriptionsController < ApplicationController
     if sub.save
       render json: { ok: true }, status: (was_new ? :created : :ok)
     else
-      render json: { errors: sub.errors }, status: :unprocessable_entity
+      render json: { errors: sub.errors }, status: :unprocessable_content
     end
   end
 
@@ -241,7 +247,7 @@ git commit -m "feat: add push subscriptions controller (create/destroy)"
 - Create: `app/frontend/components/PushToggle.tsx`
 - Modify: `vite.config.ts` (ensure SW is built as a standalone asset)
 - Modify: `app/views/layouts/application.html.erb` (register SW)
-- Modify: `app/frontend/Pages/Dashboard/Index.tsx`
+- Modify: `app/frontend/pages/dashboard/index.tsx`
 
 - [ ] **Step 1: Service worker**
 
@@ -451,7 +457,7 @@ export default function PushToggle() {
 
 - [ ] **Step 5: Add PushToggle to Dashboard**
 
-Edit `app/frontend/Pages/Dashboard/Index.tsx`, add at top of the returned JSX (before the `<h1>`):
+Edit `app/frontend/pages/dashboard/index.tsx`, add at top of the returned JSX (before the `<h1>`):
 ```tsx
 import PushToggle from "../../components/PushToggle";
 // ... existing imports
@@ -714,18 +720,19 @@ Create `spec/jobs/notify_job_spec.rb`:
 require "rails_helper"
 
 RSpec.describe NotifyJob, type: :job do
-  let(:user) { create(:user) }
-  let(:topic) { create(:topic, user: user) }
+  let(:topic) { create(:topic) }
   let(:match) { create(:match, topic: topic) }
 
-  describe "with no push subs and no discord webhook" do
+  describe "with no subscribers" do
     it "creates no notification rows" do
       expect { NotifyJob.new.perform(match.id) }.not_to change(Notification, :count)
     end
   end
 
-  describe "with a push subscription" do
-    let!(:sub) { create(:push_subscription, user: user) }
+  describe "with a subscribed user who has a push subscription" do
+    let(:user) { create(:user) }
+    let!(:subscription) { create(:topic_subscription, user: user, topic: topic) }
+    let!(:push_sub) { create(:push_subscription, user: user) }
     let(:sender) { instance_double(WebPush::Sender) }
 
     before do
@@ -733,42 +740,89 @@ RSpec.describe NotifyJob, type: :job do
       allow(sender).to receive(:deliver).and_return(:sent)
     end
 
-    it "calls the sender and records sent notification" do
+    it "creates one web_push notification targeting the push_subscription" do
       NotifyJob.new.perform(match.id)
 
-      notif = Notification.find_by(match: match, channel: "web_push")
+      notif = Notification.find_by(match: match, channel: "web_push",
+                                   target_type: "PushSubscription", target_id: push_sub.id)
       expect(notif.status).to eq("sent")
       expect(sender).to have_received(:deliver).once
     end
 
-    it "records failure when sender returns :failed" do
-      allow(sender).to receive(:deliver).and_return(:failed)
+    it "fans out to every push subscription the user has" do
+      extra = create(:push_subscription, user: user)
+
       NotifyJob.new.perform(match.id)
 
-      expect(Notification.find_by(match: match, channel: "web_push").status).to eq("failed")
+      expect(Notification.where(match: match, channel: "web_push").count).to eq(2)
+      expect(sender).to have_received(:deliver).twice
     end
 
-    it "is idempotent on rerun (does not create duplicate notification)" do
+    it "skips paused subscriptions" do
+      subscription.update!(active: false)
+
+      NotifyJob.new.perform(match.id)
+
+      expect(Notification.where(match: match)).to be_empty
+      expect(sender).not_to have_received(:deliver)
+    end
+
+    it "records failure when sender returns :failed" do
+      allow(sender).to receive(:deliver).and_return(:failed)
+
+      NotifyJob.new.perform(match.id)
+
+      expect(Notification.find_by(match: match, channel: "web_push",
+                                  target_id: push_sub.id).status).to eq("failed")
+    end
+
+    it "is idempotent on rerun (unique on match/channel/target)" do
       NotifyJob.new.perform(match.id)
       expect { NotifyJob.new.perform(match.id) }.not_to change(Notification, :count)
     end
   end
 
-  describe "with a discord webhook on the topic" do
-    let(:topic) { create(:topic, user: user, discord_webhook: "https://discord.com/api/webhooks/1/abc") }
-    let(:match) { create(:match, topic: topic) }
-    let(:client) { instance_double(Discord::WebhookClient) }
+  describe "fan-out across multiple subscribers" do
+    let!(:subscriber_a) { create(:user) }
+    let!(:subscriber_b) { create(:user) }
+    let!(:sub_a) { create(:topic_subscription, user: subscriber_a, topic: topic) }
+    let!(:sub_b) { create(:topic_subscription, user: subscriber_b, topic: topic) }
+    let!(:push_a) { create(:push_subscription, user: subscriber_a) }
+    let!(:push_b) { create(:push_subscription, user: subscriber_b) }
 
     before do
-      allow(Discord::WebhookClient).to receive(:new).and_return(client)
+      sender = instance_double(WebPush::Sender)
+      allow(WebPush::Sender).to receive(:new).and_return(sender)
+      allow(sender).to receive(:deliver).and_return(:sent)
     end
 
-    it "calls Discord client and records sent notification" do
+    it "creates one web_push notification per push subscription" do
+      NotifyJob.new.perform(match.id)
+
+      targets = Notification.where(match: match, channel: "web_push").pluck(:target_id)
+      expect(targets).to contain_exactly(push_a.id, push_b.id)
+    end
+  end
+
+  describe "with a Discord webhook on the subscription" do
+    let(:user) { create(:user) }
+    let!(:subscription) do
+      create(:topic_subscription,
+             user: user, topic: topic,
+             discord_webhook: "https://discord.com/api/webhooks/1/abc")
+    end
+    let(:client) { instance_double(Discord::WebhookClient) }
+
+    before { allow(Discord::WebhookClient).to receive(:new).and_return(client) }
+
+    it "calls Discord client and records notification keyed on the subscription" do
       allow(client).to receive(:deliver).and_return([:sent, nil])
 
       NotifyJob.new.perform(match.id)
 
-      expect(Notification.find_by(match: match, channel: "discord").status).to eq("sent")
+      notif = Notification.find_by(match: match, channel: "discord",
+                                   target_type: "TopicSubscription", target_id: subscription.id)
+      expect(notif.status).to eq("sent")
     end
 
     it "records failure with error text" do
@@ -776,9 +830,19 @@ RSpec.describe NotifyJob, type: :job do
 
       NotifyJob.new.perform(match.id)
 
-      notif = Notification.find_by(match: match, channel: "discord")
+      notif = Notification.find_by(match: match, channel: "discord",
+                                   target_id: subscription.id)
       expect(notif.status).to eq("failed")
       expect(notif.error).to include("HTTP 400")
+    end
+
+    it "skips Discord when subscription has no webhook" do
+      subscription.update!(discord_webhook: nil)
+
+      NotifyJob.new.perform(match.id)
+
+      expect(Notification.where(match: match, channel: "discord")).to be_empty
+      expect(Discord::WebhookClient).not_to have_received(:new)
     end
   end
 end
@@ -796,46 +860,51 @@ class NotifyJob < ApplicationJob
   queue_as :default
 
   def perform(match_id)
-    match = Match.includes(:story, topic: :user).find(match_id)
+    match = Match.includes(:story, topic: { topic_subscriptions: { user: :push_subscriptions } })
+                 .find(match_id)
 
-    deliver_web_push(match)
-    deliver_discord(match) if match.topic.discord_webhook.present?
+    match.topic.topic_subscriptions.where(active: true).each do |subscription|
+      deliver_web_push(match, subscription)
+      deliver_discord(match, subscription) if subscription.discord_webhook.present?
+    end
   end
 
   private
 
-  def deliver_web_push(match)
-    return unless match.topic.user.push_subscriptions.exists?
-    return if match.notifications.exists?(channel: "web_push")
-
+  def deliver_web_push(match, subscription)
     sender = WebPush::Sender.new
-    results = match.topic.user.push_subscriptions.map do |sub|
-      sender.deliver(subscription: sub, payload: web_push_payload(match))
-    end
 
-    status = results.any? { |r| r == :sent } ? "sent" : "failed"
-    create_notification(match, "web_push", status)
-  rescue ActiveRecord::RecordNotUnique
-    nil
+    subscription.user.push_subscriptions.each do |push_sub|
+      next if Notification.exists?(match_id: match.id, channel: "web_push",
+                                   target_type: "PushSubscription", target_id: push_sub.id)
+
+      result = sender.deliver(subscription: push_sub, payload: web_push_payload(match))
+      create_notification(match, "web_push", result.to_s, target: push_sub)
+    rescue ActiveRecord::RecordNotUnique
+      next
+    end
   end
 
-  def deliver_discord(match)
-    return if match.notifications.exists?(channel: "discord")
+  def deliver_discord(match, subscription)
+    return if Notification.exists?(match_id: match.id, channel: "discord",
+                                   target_type: "TopicSubscription", target_id: subscription.id)
 
     client = Discord::WebhookClient.new
-    status, error = client.deliver(url: match.topic.discord_webhook, payload: discord_payload(match))
+    status, error = client.deliver(url: subscription.discord_webhook, payload: discord_payload(match))
 
-    create_notification(match, "discord", status.to_s, error: error)
+    create_notification(match, "discord", status.to_s, target: subscription, error: error)
   rescue ActiveRecord::RecordNotUnique
     nil
   end
 
-  def create_notification(match, channel, status, error: nil)
+  def create_notification(match, channel, status, target:, error: nil)
+    normalized = (status == "sent" ? "sent" : "failed")
     Notification.create!(
       match: match,
       channel: channel,
-      status: status,
-      sent_at: (status == "sent" ? Time.current : nil),
+      target: target,
+      status: normalized,
+      sent_at: (normalized == "sent" ? Time.current : nil),
       error: error
     )
   end
@@ -875,24 +944,28 @@ git commit -m "feat: implement NotifyJob fan-out to web push + discord"
 
 ---
 
-## Task 7: Surface delivery failures on topic edit page
+## Task 7: Surface Discord delivery failures on the topics catalog index
 
 **Files:**
 - Modify: `app/controllers/topics_controller.rb`
-- Modify: `app/frontend/Pages/Topics/Edit.tsx`
+- Modify: `app/frontend/pages/topics/index.tsx`
 - Modify: `spec/requests/topics_spec.rb`
+
+> **2026-04-20 amendment:** the banner was previously on `pages/topics/edit.tsx`, which no longer exists for regular users. It now lives inline above each subscribed topic's form on `pages/topics/index.tsx`. Failure lookup is keyed on the `topic_subscription` id via `notifications.target_type/target_id`.
 
 - [ ] **Step 1: Extend spec**
 
-Append to `spec/requests/topics_spec.rb` inside the `GET /topics/:id/edit` block:
+Append to `spec/requests/topics_spec.rb` inside the `GET /topics` authenticated block:
 ```ruby
-    it "includes last_discord_failure when a recent discord delivery failed" do
-      topic = create(:topic, user: user, discord_webhook: "https://discord.com/api/webhooks/1/a")
+    it "exposes last_discord_failure per subscription when a recent delivery failed" do
+      topic = create(:topic, name: "K8s")
+      subscription = create(:topic_subscription, user: user, topic: topic,
+                            discord_webhook: "https://discord.com/api/webhooks/1/a")
       match = create(:match, topic: topic)
       create(:notification, match: match, channel: "discord", status: "failed",
-             error: "HTTP 400: invalid webhook")
+             target: subscription, error: "HTTP 400: invalid webhook")
 
-      get "/topics/#{topic.id}/edit"
+      get "/topics"
       expect(response.body).to include("HTTP 400: invalid webhook")
     end
 ```
@@ -901,76 +974,70 @@ Append to `spec/requests/topics_spec.rb` inside the `GET /topics/:id/edit` block
 
 Run: `bin/rspec spec/requests/topics_spec.rb`
 
-- [ ] **Step 3: Controller — include failure in props**
+- [ ] **Step 3: Controller — include failure in each topic's subscription props**
 
-Edit `app/controllers/topics_controller.rb`, modify `edit` action:
+Edit `app/controllers/topics_controller.rb#index` to attach `last_discord_failure` to each subscription prop. One query per request is fine — a single `Notification.joins(:match)` grouped by `target_id`:
 ```ruby
-  def edit
-    render inertia: "Topics/Edit", props: {
-      topic: full_topic_form(@topic),
-      errors: {},
-      last_discord_failure: last_discord_failure(@topic),
+  def index
+    topics = Topic.active.order(:name)
+    subs_by_topic = current_user.topic_subscriptions.index_by(&:topic_id)
+    failures_by_sub = last_discord_failures_by_subscription_id(subs_by_topic.values)
+
+    render inertia: "topics/index", props: {
+      topics: topics.map { |t| topic_props(t, subs_by_topic[t.id], failures_by_sub) }
     }
   end
-```
 
-Add private helper:
-```ruby
-  def last_discord_failure(topic)
-    Notification.joins(:match)
-                .where(matches: { topic_id: topic.id })
-                .where(channel: "discord", status: "failed")
-                .order(created_at: :desc)
-                .limit(1)
-                .pluck(:error, :created_at)
-                .first
-                &.then { |error, at| { error: error, at: at.iso8601 } }
+  private
+
+  def topic_props(topic, subscription, failures_by_sub)
+    {
+      id: topic.id,
+      name: topic.name,
+      keywords: topic.keywords,
+      subscription: subscription && {
+        id: subscription.id,
+        active: subscription.active,
+        discord_webhook: subscription.discord_webhook || "",
+        last_discord_failure: failures_by_sub[subscription.id],
+      },
+    }
   end
-```
 
-Also update `update` action to include the same prop when re-rendering edit:
-```ruby
-  def update
-    if @topic.update(topic_params)
-      redirect_to topics_path, notice: "Topic updated."
-    else
-      render inertia: "Topics/Edit", props: {
-        topic: full_topic_form(@topic),
-        errors: @topic.errors.to_hash,
-        last_discord_failure: last_discord_failure(@topic),
-      }, status: :unprocessable_entity
+  def last_discord_failures_by_subscription_id(subscriptions)
+    return {} if subscriptions.empty?
+
+    rows = Notification
+           .where(channel: "discord", status: "failed",
+                  target_type: "TopicSubscription", target_id: subscriptions.map(&:id))
+           .order(created_at: :desc)
+           .pluck(:target_id, :error, :created_at)
+
+    rows.each_with_object({}) do |(sub_id, error, at), acc|
+      acc[sub_id] ||= { error: error, at: at.iso8601 }
     end
   end
 ```
 
-- [ ] **Step 4: Update Edit page**
+- [ ] **Step 4: Update the index page**
 
-Edit `app/frontend/Pages/Topics/Edit.tsx`. Update props type and add banner:
+Edit `app/frontend/pages/topics/index.tsx`. Extend the `Subscription` type and the inline `SubscriptionForm` to render the banner:
 ```tsx
-type Props = {
-  topic: Form;
-  errors: Record<string, string[]>;
+type Subscription = {
+  id: number;
+  active: boolean;
+  discord_webhook: string;
   last_discord_failure: { error: string; at: string } | null;
 };
 
-export default function Edit({ topic, errors, last_discord_failure }: Props) {
-  // ... existing form body
-  return (
-    <>
-      <Head title={`Edit: ${topic.name}`} />
-      <h1 className="text-2xl font-semibold mb-4">Edit topic</h1>
-      {last_discord_failure && (
-        <div className="mb-4 bg-red-50 border border-red-200 text-red-800 text-sm p-3 rounded">
-          <strong>Discord delivery failed</strong> (
-          {new Date(last_discord_failure.at).toLocaleString()}): {last_discord_failure.error}
-        </div>
-      )}
-      <form ...>
-        {/* existing form unchanged */}
-      </form>
-    </>
-  );
-}
+// inside SubscriptionForm, at the top of the returned form:
+{subscription.last_discord_failure && (
+  <div className="mb-2 bg-red-50 border border-red-200 text-red-800 text-xs p-2 rounded">
+    <strong>Discord delivery failed</strong> (
+    {new Date(subscription.last_discord_failure.at).toLocaleString()}):{" "}
+    {subscription.last_discord_failure.error}
+  </div>
+)}
 ```
 
 - [ ] **Step 5: Run — expect PASS**
@@ -981,7 +1048,7 @@ Run: `bin/rspec spec/requests/topics_spec.rb`
 
 ```bash
 git add -A
-git commit -m "feat: surface last discord delivery failure on topic edit"
+git commit -m "feat: surface last Discord failure on topics catalog subscription row"
 ```
 
 ---
@@ -1022,7 +1089,7 @@ bin/jobs start --recurring-schedule-file=config/recurring.yml
 
 1. Log in as `dev@example.com` / `password123`.
 2. On dashboard, click **Enable push notifications**, accept the browser prompt.
-3. Go to `/topics`, edit one of the seeded topics, paste the Discord webhook URL, save.
+3. Go to `/topics`; in the inline subscription form for one of the seeded topics, paste the Discord webhook URL into the "Discord webhook" field and save.
 4. Wait for HN polls + matches. (Shortcut to force a match: in `bin/rails console` run `MatchJob.perform_now(Story.active.first.id)` after manually editing the story title to contain a keyword, and setting up velocity.)
 5. When a match appears:
    - Expect a browser notification banner.
@@ -1031,9 +1098,9 @@ bin/jobs start --recurring-schedule-file=config/recurring.yml
 
 - [ ] **Step 4: Test failure surfacing**
 
-1. Edit the topic's Discord webhook to a fake URL: `https://discord.com/api/webhooks/999999999999/invalidinvalid`. Save.
+1. On `/topics`, change the subscription's Discord webhook to a fake URL: `https://discord.com/api/webhooks/999999999999/invalidinvalid`. Save.
 2. Trigger another match (console: `NotifyJob.perform_now(Match.last.id)` using a recent match).
-3. Visit the topic edit page — expect the red "Discord delivery failed" banner.
+3. Visit `/topics` — expect the red "Discord delivery failed" banner above that subscription's form.
 
 - [ ] **Step 5: Test push expiration**
 
@@ -1059,10 +1126,10 @@ git tag -a v0.1.0 -m "MVP: HN trend monitor with web push + discord notification
 At the end of Plan 3:
 
 - Users can enable browser push notifications from the dashboard (captures a `PushSubscription` row).
-- `NotifyJob` delivers to all of a user's active push subscriptions AND to the topic's Discord webhook if configured.
+- `NotifyJob` fans out one delivery per active subscriber: Web Push to every `push_subscription` the subscriber owns, and Discord to the subscription's webhook if present.
 - Expired push subscriptions auto-delete.
-- Discord webhook failures (404, 4xx, persistent 429) are logged to `notifications.status=failed` with the error text, and surfaced on the topic edit page.
-- Every delivery attempt is idempotent via the `(match_id, channel)` unique index.
+- Discord webhook failures (404, 4xx, persistent 429) are logged to `notifications.status=failed` with the error text, and surfaced on the subscription's row in `/topics`.
+- Every delivery attempt is idempotent via the `(match_id, channel, target_type, target_id)` unique index.
 - Full test suite passes.
 - Manual verification: browser notifications show up, Discord messages arrive.
 

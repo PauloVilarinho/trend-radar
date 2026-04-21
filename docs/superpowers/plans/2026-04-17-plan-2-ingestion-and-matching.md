@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the data pipeline that polls Hacker News, stores stories with time-series snapshots, detects climbing velocity, matches stories against user topics via keyword prefilter + OpenAI classification, and surfaces matches on an in-app dashboard. At the end of this plan, a logged-in user with configured topics sees matching climbing HN stories on the dashboard.
+**2026-04-20 amendment:** topics are now a shared catalog, so classification is per (story, topic) rather than per (story, user, topic). `BackfillTopicJob` is renamed `BackfillSubscriptionJob` and fires on `TopicSubscription#create` (not `Topic#create`). Dashboard queries use `current_user.subscribed_topics` instead of `current_user.topics`.
 
-**Architecture:** Five job classes form the pipeline — `FetchFeedsJob` (every 5/30 min) → `FetchStoryJob` (per-item upsert + snapshot + archival + candidate decision) → `MatchJob` (keyword prefilter → OpenAI classification → match creation). A `PruneSnapshotsJob` keeps the snapshots table bounded. `BackfillTopicJob` seeds new topics against recent stories. Dashboard is a new Inertia page with dismiss / mark-as-posted actions.
+**Goal:** Build the data pipeline that polls Hacker News, stores stories with time-series snapshots, detects climbing velocity, matches stories against the shared topic catalog via keyword prefilter + OpenAI classification, and surfaces matches on an in-app dashboard. At the end of this plan, a logged-in user subscribed to at least one topic sees matching climbing HN stories on the dashboard.
+
+**Architecture:** Five job classes form the pipeline — `FetchFeedsJob` (every 5/30 min) → `FetchStoryJob` (per-item upsert + snapshot + archival + candidate decision) → `MatchJob` (keyword prefilter → OpenAI classification → match creation, scoped to ALL active topics — no user scoping). A `PruneSnapshotsJob` keeps the snapshots table bounded. `BackfillSubscriptionJob` seeds new subscribers against recent stories / existing matches. Dashboard is a new Inertia page with dismiss / mark-as-posted actions.
 
 **Tech Stack:** Rails 8, PostgreSQL, SolidQueue (recurring schedules), Faraday (HTTP client for HN + OpenAI), `openai` gem or plain Faraday for OpenAI, RSpec + VCR + WebMock.
 
@@ -32,9 +34,9 @@ New files in this plan:
 | `app/jobs/fetch_story_job.rb` | Per-story upsert + snapshot + archive + candidate decision |
 | `app/jobs/match_job.rb` | Topic prefilter + LLM + match creation |
 | `app/jobs/prune_snapshots_job.rb` | Daily snapshot pruning |
-| `app/jobs/backfill_topic_job.rb` | Seed a new topic against recent stories |
+| `app/jobs/backfill_subscription_job.rb` | Seed a new subscriber against recent stories / existing matches |
 | `app/controllers/matches_controller.rb` | Dismiss + mark-as-posted actions |
-| `app/frontend/Pages/Dashboard/Index.tsx` | Updated: show matches |
+| `app/frontend/pages/dashboard/index.tsx` | Updated: show matches |
 | `config/tracking.yml` | Tunable thresholds |
 | `config/recurring.yml` | SolidQueue recurring schedule |
 | `spec/services/*` | Service specs |
@@ -487,6 +489,7 @@ FactoryBot.define do
     match
     channel { "web_push" }
     status { "pending" }
+    association :target, factory: :push_subscription
   end
 end
 ```
@@ -523,19 +526,24 @@ class CreateMatches < ActiveRecord::Migration[8.0]
 end
 ```
 
-Edit notifications migration:
+Edit notifications migration (with fan-out target columns — see 2026-04-20 amendment):
 ```ruby
 class CreateNotifications < ActiveRecord::Migration[8.0]
   def change
     create_table :notifications do |t|
       t.references :match, null: false, foreign_key: true
       t.string :channel, null: false
+      t.string :target_type, null: false  # "PushSubscription" or "TopicSubscription"
+      t.bigint :target_id, null: false
       t.string :status, null: false, default: "pending"
       t.datetime :sent_at
       t.text :error
       t.timestamps
     end
-    add_index :notifications, [:match_id, :channel], unique: true
+    add_index :notifications,
+              [:match_id, :channel, :target_type, :target_id],
+              unique: true,
+              name: "index_notifications_on_match_channel_target"
   end
 end
 ```
@@ -566,12 +574,15 @@ Create `app/models/notification.rb`:
 class Notification < ApplicationRecord
   CHANNELS = %w[web_push discord].freeze
   STATUSES = %w[pending sent failed].freeze
+  TARGET_TYPES = %w[PushSubscription TopicSubscription].freeze
 
   belongs_to :match
+  belongs_to :target, polymorphic: true
 
   validates :channel, inclusion: { in: CHANNELS }
   validates :status, inclusion: { in: STATUSES }
-  validates :channel, uniqueness: { scope: :match_id }
+  validates :target_type, inclusion: { in: TARGET_TYPES }
+  validates :target_id, uniqueness: { scope: [:match_id, :channel, :target_type] }
 end
 ```
 
@@ -746,13 +757,12 @@ RSpec.describe KeywordMatcher do
   end
 
   describe ".matching_topics" do
-    let(:user) { create(:user) }
     let(:story) { create(:story, title: "Rust 2024 roadmap") }
 
-    it "returns active topics whose keywords match" do
-      rust = create(:topic, user: user, name: "Rust", keywords: ["rust"], active: true)
-      ai   = create(:topic, user: user, name: "AI", keywords: ["gpt", "llm"], active: true)
-      paused = create(:topic, user: user, name: "Rust paused", keywords: ["rust"], active: false)
+    it "returns active topics whose keywords match (no user scoping)" do
+      rust = create(:topic, name: "Rust", keywords: ["rust"], active: true)
+      ai   = create(:topic, name: "AI", keywords: ["gpt", "llm"], active: true)
+      paused = create(:topic, name: "Rust paused", keywords: ["rust"], active: false)
 
       result = KeywordMatcher.matching_topics(story, Topic.all)
       expect(result).to contain_exactly(rust)
@@ -1512,7 +1522,6 @@ Create `spec/jobs/match_job_spec.rb`:
 require "rails_helper"
 
 RSpec.describe MatchJob, type: :job do
-  let(:user) { create(:user) }
   let(:story) { create(:story, title: "OpenAI ships new agent SDK") }
 
   def stub_matcher(score:, reason: "ok")
@@ -1523,11 +1532,11 @@ RSpec.describe MatchJob, type: :job do
   end
 
   context "with matching topic" do
-    let!(:topic) { create(:topic, user: user, keywords: ["agent", "llm"]) }
+    let!(:topic) { create(:topic, keywords: ["agent", "llm"]) }
     before { create(:story_snapshot, story: story, score: 60, captured_at: 30.minutes.ago) }
     before { create(:story_snapshot, story: story, score: 90, captured_at: Time.current) }
 
-    it "creates a Match when score >= threshold" do
+    it "creates a Match (per story, topic) when score >= threshold" do
       stub_matcher(score: 0.8, reason: "Directly about agents")
 
       expect { MatchJob.new.perform(story.id) }.to change(Match, :count).by(1)
@@ -1552,6 +1561,16 @@ RSpec.describe MatchJob, type: :job do
       expect { MatchJob.new.perform(story.id) }.not_to change(Match, :count)
     end
 
+    it "classifies once per topic regardless of subscriber count" do
+      create_list(:topic_subscription, 3, topic: topic)
+      matcher = stub_matcher(score: 0.8)
+
+      MatchJob.new.perform(story.id)
+
+      expect(matcher).to have_received(:call).once
+      expect(Match.where(story: story, topic: topic).count).to eq(1)
+    end
+
     it "enqueues NotifyJob for new matches" do
       stub_matcher(score: 0.8)
       expect { MatchJob.new.perform(story.id) }.to have_enqueued_job(NotifyJob)
@@ -1559,7 +1578,7 @@ RSpec.describe MatchJob, type: :job do
   end
 
   context "with no matching topic" do
-    let!(:topic) { create(:topic, user: user, keywords: ["kubernetes"]) }
+    let!(:topic) { create(:topic, keywords: ["kubernetes"]) }
 
     it "does not call OpenAI" do
       expect(Openai::Matcher).not_to receive(:new)
@@ -1567,8 +1586,17 @@ RSpec.describe MatchJob, type: :job do
     end
   end
 
+  context "inactive topics" do
+    let!(:_inactive) { create(:topic, keywords: ["agent"], active: false) }
+
+    it "is skipped by the prefilter" do
+      expect(Openai::Matcher).not_to receive(:new)
+      MatchJob.new.perform(story.id)
+    end
+  end
+
   context "daily budget exceeded" do
-    let!(:topic) { create(:topic, user: user, keywords: ["agent"]) }
+    let!(:topic) { create(:topic, keywords: ["agent"]) }
 
     it "skips classification when today's classification count exceeds budget" do
       allow(TrackingConfig).to receive(:match).and_return(
@@ -1686,58 +1714,70 @@ git commit -m "feat: add MatchJob with prefilter, OpenAI call, budget guard"
 
 ---
 
-## Task 12: BackfillTopicJob
+## Task 12: BackfillSubscriptionJob
 
 **Files:**
-- Create: `app/jobs/backfill_topic_job.rb`
-- Create: `spec/jobs/backfill_topic_job_spec.rb`
+- Create: `app/jobs/backfill_subscription_job.rb`
+- Create: `spec/jobs/backfill_subscription_job_spec.rb`
+
+> **2026-04-20 amendment:** renamed from `BackfillTopicJob`. In the shared-catalog model a brand-new topic has zero subscribers (no notifications to send), so the backfill trigger moves from `Topic#create` to `TopicSubscription#create`. The job takes a `topic_subscription_id` argument so we can resolve the subscriber's user if we later need to scope the work.
 
 - [ ] **Step 1: Spec**
 
-Create `spec/jobs/backfill_topic_job_spec.rb`:
+Create `spec/jobs/backfill_subscription_job_spec.rb`:
 ```ruby
 require "rails_helper"
 
-RSpec.describe BackfillTopicJob, type: :job do
+RSpec.describe BackfillSubscriptionJob, type: :job do
   let(:user) { create(:user) }
-  let!(:topic) { create(:topic, user: user, keywords: ["agent"]) }
+  let!(:topic) { create(:topic, keywords: ["agent"]) }
+  let!(:subscription) { create(:topic_subscription, user: user, topic: topic) }
 
-  it "enqueues MatchJob for each story from last 24 hours" do
+  it "enqueues MatchJob for each active story from last 24 hours" do
     recent = create_list(:story, 3, hn_created_at: 2.hours.ago)
     _old = create(:story, hn_created_at: 3.days.ago)
 
-    BackfillTopicJob.new.perform(topic.id)
+    BackfillSubscriptionJob.new.perform(subscription.id)
 
     recent.each do |s|
       expect(MatchJob).to have_been_enqueued.with(s.id)
     end
   end
 
-  it "does nothing for inactive topic" do
+  it "does nothing when the topic is inactive" do
     topic.update!(active: false)
     create(:story, hn_created_at: 1.hour.ago)
-    BackfillTopicJob.new.perform(topic.id)
+    BackfillSubscriptionJob.new.perform(subscription.id)
     expect(MatchJob).not_to have_been_enqueued
+  end
+
+  it "no-ops when the subscription has been deleted" do
+    id = subscription.id
+    subscription.destroy
+    expect {
+      BackfillSubscriptionJob.new.perform(id)
+    }.not_to raise_error
   end
 end
 ```
 
 - [ ] **Step 2: Run — expect FAIL**
 
-Run: `bin/rspec spec/jobs/backfill_topic_job_spec.rb`
+Run: `bin/rspec spec/jobs/backfill_subscription_job_spec.rb`
 
 - [ ] **Step 3: Implement**
 
-Create `app/jobs/backfill_topic_job.rb`:
+Create `app/jobs/backfill_subscription_job.rb`:
 ```ruby
-class BackfillTopicJob < ApplicationJob
+class BackfillSubscriptionJob < ApplicationJob
   queue_as :default
 
   BACKFILL_WINDOW = 24.hours
 
-  def perform(topic_id)
-    topic = Topic.find(topic_id)
-    return unless topic.active?
+  def perform(topic_subscription_id)
+    subscription = TopicSubscription.find_by(id: topic_subscription_id)
+    return unless subscription
+    return unless subscription.topic.active?
 
     Story.active.where("hn_created_at > ?", BACKFILL_WINDOW.ago).find_each do |story|
       MatchJob.perform_later(story.id)
@@ -1746,30 +1786,31 @@ class BackfillTopicJob < ApplicationJob
 end
 ```
 
-- [ ] **Step 4: Hook into topic creation**
+Note: `MatchJob` already skips stories that already have a `Match` for a given topic, so this is safe to run repeatedly (e.g., second subscriber to an already-backfilled topic).
 
-Edit `app/controllers/topics_controller.rb` — in the `create` action, after `redirect_to topics_path`, schedule the backfill:
+- [ ] **Step 4: Hook into subscription creation**
+
+Edit `app/controllers/topic_subscriptions_controller.rb#create`. After a successful save, enqueue the backfill:
 ```ruby
-  def create
-    topic = current_user.topics.build(topic_params)
-    if topic.save
-      BackfillTopicJob.perform_later(topic.id)
-      redirect_to topics_path, notice: "Topic created."
-    else
-      # ... unchanged
-    end
-  end
+if sub.persisted? || sub.save
+  BackfillSubscriptionJob.perform_later(sub.id) if sub.previously_new_record?
+  redirect_to topics_path, notice: "Subscribed to #{@topic.name}."
+else
+  # ...
+end
 ```
+
+(Use `previously_new_record?` to avoid re-enqueuing when `find_or_initialize_by` returns an already-persisted record.)
 
 - [ ] **Step 5: Run — expect PASS**
 
-Run: `bin/rspec spec/jobs/backfill_topic_job_spec.rb`
+Run: `bin/rspec spec/jobs/backfill_subscription_job_spec.rb`
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add -A
-git commit -m "feat: add BackfillTopicJob triggered on topic create"
+git commit -m "feat: add BackfillSubscriptionJob triggered on subscription create"
 ```
 
 ---
@@ -1889,7 +1930,7 @@ git commit -m "chore: configure solid_queue recurring schedules"
 
 **Files:**
 - Modify: `app/controllers/dashboard_controller.rb`
-- Modify: `app/frontend/Pages/Dashboard/Index.tsx`
+- Modify: `app/frontend/pages/dashboard/index.tsx`
 - Modify: `spec/requests/dashboard_spec.rb`
 
 - [ ] **Step 1: Expand failing spec**
@@ -1900,23 +1941,24 @@ Edit `spec/requests/dashboard_spec.rb`. Replace the authenticated block with:
       let(:user) { create(:user) }
       before { sign_in user }
 
-      it "renders matches for user's topics only, sorted by matched_at desc" do
-        topic = create(:topic, user: user)
-        other_topic = create(:topic) # different user
+      it "renders matches for topics this user subscribes to, sorted by matched_at desc" do
+        subscribed = create(:topic)
+        unsubscribed = create(:topic)
+        create(:topic_subscription, user: user, topic: subscribed)
 
-        older = create(:match, topic: topic, matched_at: 2.hours.ago, reason: "Older match")
-        newer = create(:match, topic: topic, matched_at: 10.minutes.ago, reason: "Newer match")
-        _hidden = create(:match, topic: topic, dismissed_at: Time.current, reason: "Hidden")
-        _other_user = create(:match, topic: other_topic, reason: "Other user")
+        older = create(:match, topic: subscribed, matched_at: 2.hours.ago, reason: "Older match")
+        newer = create(:match, topic: subscribed, matched_at: 10.minutes.ago, reason: "Newer match")
+        _hidden = create(:match, topic: subscribed, dismissed_at: Time.current, reason: "Hidden")
+        _not_subscribed = create(:match, topic: unsubscribed, reason: "Not subscribed")
 
         get "/"
 
         body = response.body
-        expect(body).to include("Dashboard/Index")
+        expect(body).to include("dashboard/index")
         # newer should appear before older in the JSON props
         expect(body.index("Newer match")).to be < body.index("Older match")
         expect(body).not_to include("Hidden")
-        expect(body).not_to include("Other user")
+        expect(body).not_to include("Not subscribed")
       end
     end
 ```
@@ -1931,14 +1973,14 @@ Edit `app/controllers/dashboard_controller.rb`:
 ```ruby
 class DashboardController < ApplicationController
   def index
-    topics = current_user.topics
+    subscribed_topic_ids = current_user.subscribed_topics.select(:id)
     matches = Match.visible
-                   .where(topic_id: topics.select(:id))
+                   .where(topic_id: subscribed_topic_ids)
                    .includes(:story, :topic)
                    .recent
                    .limit(100)
 
-    render inertia: "Dashboard/Index", props: {
+    render inertia: "dashboard/index", props: {
       matches: matches.map { |m| match_props(m) }
     }
   end
@@ -1969,7 +2011,7 @@ end
 
 - [ ] **Step 4: Dashboard page**
 
-Replace `app/frontend/Pages/Dashboard/Index.tsx`:
+Replace `app/frontend/pages/dashboard/index.tsx`:
 ```tsx
 import { Head, router } from "@inertiajs/react";
 
@@ -2068,7 +2110,7 @@ Run: `bin/rspec spec/requests/dashboard_spec.rb`
 
 ```bash
 git add -A
-git commit -m "feat: dashboard shows visible matches for user's topics"
+git commit -m "feat: dashboard shows matches for user's subscribed topics"
 ```
 
 ---
@@ -2088,7 +2130,8 @@ require "rails_helper"
 
 RSpec.describe "Matches", type: :request do
   let(:user) { create(:user) }
-  let(:topic) { create(:topic, user: user) }
+  let(:topic) { create(:topic) }
+  let!(:subscription) { create(:topic_subscription, user: user, topic: topic) }
   let(:match) { create(:match, topic: topic) }
 
   before { sign_in user }
@@ -2100,8 +2143,9 @@ RSpec.describe "Matches", type: :request do
       expect(response).to redirect_to(root_path)
     end
 
-    it "404s for other user's match" do
-      other = create(:match)
+    it "404s for a match on a topic the user is not subscribed to" do
+      other_topic = create(:topic)
+      other = create(:match, topic: other_topic)
       expect { post "/matches/#{other.id}/mark_posted" }.to raise_error(ActiveRecord::RecordNotFound)
     end
   end
@@ -2121,12 +2165,21 @@ Run: `bin/rspec spec/requests/matches_spec.rb`
 
 - [ ] **Step 3: Routes**
 
-Edit `config/routes.rb`:
+Edit `config/routes.rb` — extend the existing route file (which already has the topics + admin blocks from Plan 1 Task 9):
 ```ruby
 Rails.application.routes.draw do
   devise_for :users
   root to: "dashboard#index"
-  resources :topics
+
+  resources :topics, only: [:index] do
+    resource :subscription, only: [:create, :update, :destroy],
+                            controller: "topic_subscriptions"
+  end
+
+  namespace :admin do
+    root "topics#index"
+    resources :topics, except: [:destroy, :show]
+  end
 
   post "matches/:id/mark_posted", to: "matches#mark_posted", as: :mark_posted_match
   post "matches/:id/dismiss", to: "matches#dismiss", as: :dismiss_match
@@ -2155,8 +2208,9 @@ class MatchesController < ApplicationController
   private
 
   def set_match
-    @match = Match.joins(topic: :user)
-                  .where(users: { id: current_user.id })
+    # Only matches on topics the current user is subscribed to.
+    @match = Match.joins(topic: :topic_subscriptions)
+                  .where(topic_subscriptions: { user_id: current_user.id })
                   .find(params[:id])
   end
 end

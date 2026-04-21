@@ -3,10 +3,12 @@
 **Status:** pending
 **Depends on:** Task 7.
 
+Unchanged from the original design — `PushSubscription` is a per-browser record unrelated to topics.
+
 ## Files
 
 - Create: `db/migrate/*_create_push_subscriptions.rb`, `app/models/push_subscription.rb`, `spec/models/push_subscription_spec.rb`, `spec/factories/push_subscriptions.rb`
-- Modify: `app/models/user.rb` (add `has_many :push_subscriptions`)
+- Modify: `app/models/user.rb` (add `has_many :push_subscriptions, dependent: :destroy`)
 
 ## Steps
 
@@ -87,7 +89,7 @@
    end
    ```
 
-6. Update `app/models/user.rb`:
+6. Update `app/models/user.rb` — add:
    ```ruby
    has_many :push_subscriptions, dependent: :destroy
    ```

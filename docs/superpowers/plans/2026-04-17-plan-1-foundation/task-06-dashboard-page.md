@@ -32,7 +32,7 @@
          it "renders the dashboard inertia page" do
            get "/"
            expect(response).to have_http_status(:ok)
-           expect(response.body).to include("Dashboard/Index")
+           expect(response.body).to include("dashboard/index")
          end
        end
      end
@@ -60,12 +60,12 @@
    ```ruby
    class DashboardController < ApplicationController
      def index
-       render inertia: "Dashboard/Index", props: {}
+       render inertia: "dashboard/index", props: {}
      end
    end
    ```
 
-6. `app/frontend/Pages/Dashboard/Index.tsx`:
+6. `app/frontend/pages/dashboard/index.tsx`:
    ```tsx
    import { Head } from "@inertiajs/react";
 
