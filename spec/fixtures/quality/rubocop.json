@@ -1,0 +1,31 @@
+{
+  "metadata": { "rubocop_version": "1.60.0" },
+  "files": [
+    {
+      "path": "app/models/user.rb",
+      "offenses": [
+        {
+          "cop_name": "Metrics/ClassLength",
+          "message": "Class has too many lines. [143/100]",
+          "location": {}
+        },
+        {
+          "cop_name": "Metrics/MethodLength",
+          "message": "Method has too many lines. [14/10]",
+          "location": {}
+        }
+      ]
+    },
+    {
+      "path": "app/services/topic_index_props.rb",
+      "offenses": [
+        {
+          "cop_name": "Metrics/AbcSize",
+          "message": "Assignment Branch Condition size for call is too high. [<7, 18, 3> 19.55/15]",
+          "location": {}
+        }
+      ]
+    }
+  ],
+  "summary": {}
+}
