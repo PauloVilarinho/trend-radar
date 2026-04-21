@@ -46,6 +46,28 @@ namespace :quality do
     File.write(QUALITY_DIR.join("flog.json"), JSON.pretty_generate(result))
   end
 
+  desc "Aggregate all measurements; print gate table; exit 0 on pass, 1 on fail"
+  task report: :environment do
+    require "yaml"
+    measurements = {
+      coverage: Quality::CoverageParser.new(QUALITY_DIR.join("coverage.json")).parse,
+      rubocop: Quality::RubocopParser.new(QUALITY_DIR.join("rubocop.json")).parse,
+      flog: JSON.parse(File.read(QUALITY_DIR.join("flog.json")), symbolize_names: true),
+      mutation: JSON.parse(File.read(QUALITY_DIR.join("mutation.json")), symbolize_names: true)
+    }
+    thresholds = YAML.load_file(Rails.root.join("config/quality_thresholds.yml"))
+
+    report = Quality::Report.new(measurements: measurements, thresholds: thresholds)
+    puts report.to_s
+    puts ""
+    puts "Detailed reports:"
+    puts "  #{QUALITY_DIR.join('overview.html')}    (RubyCritic)"
+    puts "  #{Rails.root.join('coverage/index.html')}       (SimpleCov)"
+    puts "  #{QUALITY_DIR.join('mutation.txt')}       (Mutant)"
+
+    exit(report.passed? ? 0 : 1)
+  end
+
   desc "Run Mutant against app/ and lib/quality; ratchet threshold on first run"
   task mutation: :environment do
     FileUtils.mkdir_p(QUALITY_DIR)
@@ -78,3 +100,13 @@ def ratchet_if_unset!(kill_ratio)
   File.write(path, thresholds.to_yaml)
   puts "[quality:mutation] Ratchet set: mutation.kill_ratio_min = #{kill_ratio}"
 end
+
+desc "Run all quality gates: coverage, rubocop, critic, flog, mutation, report"
+task quality: %w[
+  quality:coverage
+  quality:rubocop
+  quality:critic
+  quality:flog
+  quality:mutation
+  quality:report
+]
