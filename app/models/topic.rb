@@ -14,14 +14,26 @@ class Topic < ApplicationRecord
   def validate_keywords
     return unless keywords.is_a?(Array)
 
-    if keywords.empty? || keywords.all? { |k| k.to_s.strip.empty? }
-      errors.add(:keywords, "must have at least one non-blank entry")
-    end
-    if keywords.any? { |k| k.to_s.strip.empty? }
-      errors.add(:keywords, "contains blank entries")
-    end
-    if keywords.length > MAX_KEYWORDS
-      errors.add(:keywords, "too many (max #{MAX_KEYWORDS})")
-    end
+    validate_keywords_presence
+    validate_keywords_no_blanks
+    validate_keywords_count
+  end
+
+  def validate_keywords_presence
+    return unless keywords.empty? || keywords.all? { |k| k.to_s.strip.empty? }
+
+    errors.add(:keywords, "must have at least one non-blank entry")
+  end
+
+  def validate_keywords_no_blanks
+    return unless keywords.any? { |k| k.to_s.strip.empty? }
+
+    errors.add(:keywords, "contains blank entries")
+  end
+
+  def validate_keywords_count
+    return unless keywords.length > MAX_KEYWORDS
+
+    errors.add(:keywords, "too many (max #{MAX_KEYWORDS})")
   end
 end

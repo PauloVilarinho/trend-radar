@@ -1,8 +1,43 @@
 # Omakase Ruby styling for Rails
 inherit_gem: { rubocop-rails-omakase: rubocop.yml }
 
-# Overwrite or add rules to create your own house style
-#
-# # Use `[a, [b, c]]` not `[ a, [ b, c ] ]`
-# Layout/SpaceInsideArrayLiteralBrackets:
-#   Enabled: false
+# --- Code-quality gates (aspirational thresholds) ---
+Metrics/ClassLength:
+  Enabled: true
+  Max: 100
+  Exclude:
+    - 'spec/**/*'
+    - 'db/**/*'
+
+Metrics/ModuleLength:
+  Enabled: true
+  Max: 100
+  Exclude:
+    - 'spec/**/*'
+
+Metrics/MethodLength:
+  Enabled: true
+  Max: 10
+  Exclude:
+    - 'db/migrate/**/*'
+
+Metrics/AbcSize:
+  Enabled: true
+  Max: 15
+  Exclude:
+    - 'db/migrate/**/*'
+
+Metrics/CyclomaticComplexity:
+  Enabled: true
+  Max: 6
+
+Metrics/PerceivedComplexity:
+  Enabled: true
+  Max: 7
+
+# Don't gate block length — DSLs and rake tasks are legitimately long
+Metrics/BlockLength:
+  Exclude:
+    - 'config/**/*'
+    - 'spec/**/*'
+    - 'lib/tasks/**/*'
