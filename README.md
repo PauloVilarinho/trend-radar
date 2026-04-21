@@ -2,7 +2,6 @@
 
 A Rails 8 service that monitors Hacker News for stories matching a shared catalog of topics, detects when those stories are gaining traction fast, and notifies subscribers via web push and Discord webhooks.
 
-Built as the working codebase for an ongoing experiment in measuring AI-generated code with objective quality gates — see [docs/blog/stop-reading-ai-code.md](docs/blog/stop-reading-ai-code.md).
 
 ## What it does
 
