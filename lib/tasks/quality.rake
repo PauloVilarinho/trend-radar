@@ -3,6 +3,13 @@ require "json"
 
 QUALITY_DIR = Rails.root.join("tmp/quality")
 
+# Top-level constants Mutant should mutate. Add new models/controllers/services here.
+MUTANT_SUBJECTS = %w[
+  User* Topic* PushSubscription* TopicSubscription* TopicIndexProps*
+  ApplicationController* DashboardController* TopicsController*
+  TopicSubscriptionsController* Admin* Quality*
+].freeze
+
 namespace :quality do
   desc "Run rspec with SimpleCov; copy coverage/.last_run.json into tmp/quality/"
   task :coverage do
@@ -38,4 +45,36 @@ namespace :quality do
     result = Quality::FlogParser.new(paths).parse
     File.write(QUALITY_DIR.join("flog.json"), JSON.pretty_generate(result))
   end
+
+  desc "Run Mutant against app/ and lib/quality; ratchet threshold on first run"
+  task mutation: :environment do
+    FileUtils.mkdir_p(QUALITY_DIR)
+    txt_path = QUALITY_DIR.join("mutation.txt")
+
+    cmd = [
+      "bundle", "exec", "mutant", "run",
+      "--integration", "rspec",
+      "--require", "./script/mutant_bootstrap.rb",
+      "--usage", "opensource",
+      "--", *MUTANT_SUBJECTS
+    ]
+    sh "#{cmd.shelljoin} > #{txt_path.to_s.shellescape} 2>&1 || true"
+
+    parsed = Quality::MutantParser.new(txt_path).parse
+    File.write(QUALITY_DIR.join("mutation.json"), JSON.pretty_generate(parsed))
+
+    ratchet_if_unset!(parsed[:kill_ratio])
+  end
+end
+
+def ratchet_if_unset!(kill_ratio)
+  require "yaml"
+  path = Rails.root.join("config/quality_thresholds.yml")
+  thresholds = YAML.load_file(path)
+
+  return unless thresholds.dig("mutation", "kill_ratio_min").nil?
+
+  thresholds["mutation"]["kill_ratio_min"] = kill_ratio
+  File.write(path, thresholds.to_yaml)
+  puts "[quality:mutation] Ratchet set: mutation.kill_ratio_min = #{kill_ratio}"
 end
