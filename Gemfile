@@ -54,6 +54,10 @@ group :development, :test do
   gem "factory_bot_rails"
   gem "faker"
   gem "dotenv-rails"
+  gem "simplecov", require: false
+  gem "rubycritic", require: false
+  gem "flog", require: false
+  gem "mutant-rspec", require: false
 end
 
 group :test do
