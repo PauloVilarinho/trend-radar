@@ -8,7 +8,7 @@ module Quality
 
     def parse
       flog = Flog.new
-      @paths.each { |path| flog.flog(path) }
+      flog.flog(*@paths)
 
       totals = flog.totals
       return empty_result if totals.empty?

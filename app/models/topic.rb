@@ -12,8 +12,6 @@ class Topic < ApplicationRecord
   private
 
   def validate_keywords
-    return unless keywords.is_a?(Array)
-
     validate_keywords_presence
     validate_keywords_no_blanks
     validate_keywords_count

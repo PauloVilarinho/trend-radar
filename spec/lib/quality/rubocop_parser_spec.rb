@@ -25,4 +25,26 @@ RSpec.describe Quality::RubocopParser do
   ensure
     empty_file&.unlink
   end
+
+  it "ignores offenses whose message doesn't contain a measure/threshold pair" do
+    weird = Tempfile.new([ "rubocop", ".json" ])
+    weird.write(<<~JSON)
+      {
+        "files": [{
+          "path": "app/dummy.rb",
+          "offenses": [
+            { "cop_name": "Metrics/ClassLength", "message": "no numbers here" }
+          ]
+        }],
+        "summary": {}
+      }
+    JSON
+    weird.close
+
+    parsed = described_class.new(weird.path).parse
+
+    expect(parsed[:class_length_max]).to be_nil
+  ensure
+    weird&.unlink
+  end
 end
