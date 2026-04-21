@@ -2,7 +2,7 @@ import type { ReactNode } from "react"
 import { Link, usePage } from "@inertiajs/react"
 
 type PageProps = {
-  current_user: { id: number; email: string } | null
+  current_user: { id: number; email: string; admin: boolean } | null
   flash: { notice?: string; alert?: string }
 }
 
@@ -18,6 +18,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             {current_user ? (
               <>
                 <Link href="/topics">Topics</Link>
+                {current_user.admin && <Link href="/admin/topics">Admin</Link>}
                 <Link href="/users/sign_out" method="delete" as="button">Sign out</Link>
               </>
             ) : (
