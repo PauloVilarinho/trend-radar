@@ -1,0 +1,13 @@
+Mutant configuration:
+- Matcher:         #<Mutant::Matcher::Config>
+- Integration:     rspec
+Subjects:          12
+Mutations:         240
+Results:           240
+Kills:             218
+Alive:             22
+Runtime:           96.27s
+Killtime:          212.81s
+Overhead:          -55.76%
+Mutations/s:       2.49
+Coverage:          90.83%
