@@ -46,4 +46,5 @@ node_modules
 # Code quality artifacts
 /coverage/
 /tmp/quality/
+/.mutant/
 
