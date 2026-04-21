@@ -1,12 +1,14 @@
 # Trend Radar — HN Trend Monitor (MVP Design)
 
-**Date:** 2026-04-17
+**Date:** 2026-04-17 (amended 2026-04-20)
 **Status:** Design approved, awaiting implementation plan
 **Scope:** MVP — Hacker News only. Twitter and Reddit are explicitly out of scope for this spec.
 
+**2026-04-20 amendment:** topics became a shared, admin-curated catalog; users subscribe instead of owning their own topic rows. Driver: OpenAI classification cost scales with unique topics, not users × topics, so sharing collapses N overlapping subscriptions into one classify call. Touches: `topics` table (drops `user_id`, `discord_webhook`), new `topic_subscriptions` join table, `users.admin` boolean, new `/admin/topics` namespace, `MatchJob` + `NotifyJob` pipeline.
+
 ## Purpose
 
-A multi-user web application that monitors Hacker News for stories matching user-defined topics, detects when those stories are gaining traction fast (velocity), and notifies subscribers via web push and per-topic Discord webhooks so editorial/social-media teams can post about trending tech topics quickly.
+A multi-user web application that monitors Hacker News for stories matching a shared catalog of topics, detects when those stories are gaining traction fast (velocity), and notifies subscribers via web push and per-subscription Discord webhooks so editorial/social-media teams can post about trending tech topics quickly. Topics are curated by admins; any signed-in user can subscribe to them.
 
 ## Key Decisions
 
@@ -26,8 +28,8 @@ A multi-user web application that monitors Hacker News for stories matching user
 ## MVP Scope
 
 **In scope:**
-1. User sign up / log in (Devise)
-2. Subscribe to topics (freeform keyword lists, per-topic Discord webhook optional)
+1. User sign up / log in (Devise); admin role gated by `users.admin` boolean
+2. Admin catalog of topics (keyword lists); regular users subscribe and optionally attach their own Discord webhook per subscription
 3. HN poller (every 30 min, young stories every 5 min)
 4. Keyword prefilter → OpenAI classification → velocity check pipeline
 5. In-app dashboard showing matched + climbing stories
@@ -85,24 +87,38 @@ No Redis, no external job queue. SolidQueue uses Postgres.
 
 ## Data Model
 
-### `users` (Devise standard)
-Email, encrypted password, timestamps.
+### `users` (Devise standard + admin flag)
+Email, encrypted password, timestamps, plus `admin` boolean (default `false`, `null: false`). Bootstrap the first admin via `rake admin:promote[email@example.com]`; dev/test `db/seeds.rb` creates an admin user with a known password for reachable admin UI.
 
 ### `topics`
-User-defined subscriptions.
+Shared catalog of topics curated by admins. Regular users cannot create, edit, or destroy topics — only subscribe.
 
 | Column | Type | Notes |
 |---|---|---|
-| `user_id` | fk | belongs_to User |
-| `name` | string | e.g., "AI agents" |
+| `created_by_id` | fk users, nullable | Audit: which admin added this. `on_delete: nullify`. |
+| `name` | string | e.g., "AI agents"; unique globally (case-insensitive). |
 | `keywords` | text[] | Prefilter terms, ≥1, ≤20 |
-| `discord_webhook` | string, encrypted, nullable | Per-topic webhook |
-| `active` | boolean, default true | |
+| `active` | boolean, default true | Admin soft-disable lever. No destroy action in MVP — inactive topics are skipped by the pipeline. |
 | timestamps | | |
 
-Indexes: `(user_id, name)` unique.
+Indexes: `LOWER(name)` unique.
 
-Limits: ≤20 keywords per topic, ≤50 topics per user (validation).
+Limits: ≤20 keywords per topic.
+
+### `topic_subscriptions`
+Per-user opt-in to a shared topic, carrying per-user settings.
+
+| Column | Type | Notes |
+|---|---|---|
+| `user_id` | fk users | cascade delete |
+| `topic_id` | fk topics | cascade delete |
+| `discord_webhook` | string, encrypted, nullable | Each subscriber's own Discord destination. |
+| `active` | boolean, default true | User pause without unsubscribing. |
+| timestamps | | |
+
+Indexes: `(user_id, topic_id)` unique.
+
+Limits: ≤50 subscriptions per user (validation).
 
 ### `stories`
 One row per HN item we've seen.
@@ -156,17 +172,19 @@ Junction of story × topic, produced when keyword prefilter + LLM confirm releva
 Indexes: `(story_id, topic_id)` unique; `(topic_id, matched_at DESC)` for dashboard queries.
 
 ### `notifications`
-Audit log per delivery, idempotency guard.
+Audit log per delivery, idempotency guard. With shared topics, one match fans out to many subscribers, so uniqueness must include the delivery target.
 
 | Column | Type | Notes |
 |---|---|---|
 | `match_id` | fk | |
 | `channel` | enum: `web_push` \| `discord` | |
+| `target_type` | string | `"PushSubscription"` or `"TopicSubscription"` |
+| `target_id` | bigint | id of the delivery target (push_subscription or topic_subscription) |
 | `status` | enum: `pending` \| `sent` \| `failed` | |
 | `sent_at` | datetime, nullable | |
 | `error` | text, nullable | |
 
-Indexes: `(match_id, channel)` unique — prevents double-send on retry.
+Indexes: `(match_id, channel, target_type, target_id)` unique — prevents double-send to the same browser or the same subscription's Discord channel on retry.
 
 ### `push_subscriptions`
 Per-browser Web Push endpoints.
@@ -182,10 +200,32 @@ Per-browser Web Push endpoints.
 
 ## Relationships
 
-- `User` has_many `topics`, `push_subscriptions`
-- `Topic` has_many `matches`
+- `User` has_many `topic_subscriptions`, `push_subscriptions`; has_many `subscribed_topics, through: :topic_subscriptions, source: :topic`; has_many `created_topics, class_name: "Topic", foreign_key: :created_by_id, dependent: :nullify`
+- `Topic` belongs_to `created_by, class_name: "User", optional: true`; has_many `topic_subscriptions`, `matches`; has_many `subscribers, through: :topic_subscriptions, source: :user`
+- `TopicSubscription` belongs_to `user`, `topic`
 - `Story` has_many `story_snapshots`, `matches`
-- `Match` has_many `notifications`
+- `Match` has_many `notifications` (one per (channel, target))
+
+## Routes & Access
+
+```ruby
+devise_for :users
+root "dashboard#index"
+
+resources :topics, only: [:index] do
+  resource :subscription, only: [:create, :update, :destroy],
+                          controller: "topic_subscriptions"
+end
+
+namespace :admin do
+  root "topics#index"
+  resources :topics, except: [:destroy, :show]  # soft-disable via update
+end
+```
+
+- **Regular users** can only `GET /topics` (the catalog) and manage their own subscription under `/topics/:topic_id/subscription`.
+- **Admins** reach full topic CRUD (minus destroy) under `/admin/topics`. A single `ApplicationController#require_admin!` before-action gates the admin namespace; non-admins are redirected to root with an "Admins only." flash.
+- **AppLayout** renders an "Admin" nav link only when `current_user.admin`.
 
 ## Data Flow (Lifecycle of a Story)
 
@@ -220,8 +260,10 @@ Logic:
 
 ### Stage 3 — `MatchJob(story_id)` — keyword prefilter + LLM
 
+**Classification is per (story, topic), not per user.** A topic with 100 subscribers is classified once; all 100 subscribers get fan-out notifications off the single `Match` row.
+
 1. Load the story.
-2. Query all active topics whose any `keywords` entry appears in `story.title` OR `story.url` OR `story.text` (case-insensitive, using Postgres array semantics + `ILIKE` with escaped literals).
+2. Query all `active: true` topics whose any `keywords` entry appears in `story.title` OR `story.url` OR `story.text` (case-insensitive, using Postgres array semantics + `ILIKE` with escaped literals). No user-scoping — the topic catalog is shared.
 3. For each matching topic **without an existing `Match` for this story**, call OpenAI:
    - Model: `gpt-4o-mini`
    - `response_format: json_object`
@@ -235,13 +277,13 @@ Logic:
 
 Cost-control soft guard: if today's classification count exceeds a configurable budget (default 500/day), stop enqueuing new MatchJobs and log a warning.
 
-### Stage 4 — `NotifyJob(match_id)` — fan-out
+### Stage 4 — `NotifyJob(match_id)` — fan-out to subscribers
 
-1. Load the match + its topic + the topic's user.
-2. For each enabled channel:
-   - **Web push** → find user's `push_subscriptions`, send via `web-push` gem. One `notifications` row per subscription.
-   - **Discord** → if `topic.discord_webhook` present, POST to it. One `notifications` row for the topic.
-3. Idempotency guard: `(match_id, channel)` unique constraint prevents double-send on retry.
+1. Load the match + its topic + all `topic_subscriptions` where `active: true`, preloading each subscriber's `push_subscriptions`.
+2. For each active subscription:
+   - **Web push** → for each of the subscriber's `push_subscriptions`, send via `web-push` gem. One `notifications` row per `(match_id, channel: :web_push, target: push_subscription)`.
+   - **Discord** → if `subscription.discord_webhook` is present, POST to it. One `notifications` row per `(match_id, channel: :discord, target: topic_subscription)`.
+3. Idempotency guard: `(match_id, channel, target_type, target_id)` unique constraint prevents double-send on retry.
 4. On failure: update notification `status=failed`, `error=...`. Log; do not refan.
 
 ### Stage 5 — User action (controller, no job)
@@ -254,9 +296,9 @@ Cost-control soft guard: if today's classification count exceeds a configurable 
 
 Delete `story_snapshots` where `captured_at < 7 days ago`.
 
-### Supporting: `BackfillTopicJob(topic_id)`
+### Supporting: `BackfillSubscriptionJob(topic_subscription_id)`
 
-When a user creates a new topic, run MatchJob logic against the last ~24 h of stories so the dashboard isn't empty on signup.
+When a user subscribes to an existing topic, run MatchJob logic against the last ~24 h of stories (or reuse existing `Match` rows for that topic) so the new subscriber's dashboard isn't empty. When an admin creates a brand-new topic, no backfill is needed — there are no subscribers yet; `BackfillSubscriptionJob` fires the first time someone subscribes.
 
 ## Error Handling & Edge Cases
 
@@ -273,7 +315,7 @@ When a user creates a new topic, run MatchJob logic against the last ~24 h of st
 - **Cost runaway:** daily classification soft budget.
 
 ### Discord webhook failures
-- **Bad URL / revoked:** 4xx → mark `notifications.status=failed`, do not retry. Surface on topic settings page.
+- **Bad URL / revoked:** 4xx → mark `notifications.status=failed`, do not retry. Surface the last failure on the subscription row (visible to the owning user on their topics page).
 - **Rate limit (429):** retry respecting `Retry-After`.
 - **Discord outage:** retry a few times, then fail.
 
@@ -284,13 +326,15 @@ When a user creates a new topic, run MatchJob logic against the last ~24 h of st
 ### Race conditions
 - **Concurrent story fetch:** `hn_id` unique + `INSERT … ON CONFLICT DO UPDATE`.
 - **Duplicate match:** `(story_id, topic_id)` unique; rescue `RecordNotUnique`.
-- **Duplicate notification:** `(match_id, channel)` unique.
+- **Duplicate notification:** `(match_id, channel, target_type, target_id)` unique.
+- **Concurrent subscribe:** `(user_id, topic_id)` unique on `topic_subscriptions`.
 
 ### User-input edge cases
 - **Keyword with SQL special chars:** parameter-bound `ILIKE`, escape `%` and `_` as literals.
-- **Limits:** ≤20 keywords per topic, ≤50 topics per user.
-- **Discord webhook URL format:** validate format before saving.
+- **Limits:** ≤20 keywords per topic (admin-enforced); ≤50 subscriptions per user.
+- **Discord webhook URL format:** validate format before saving (on `topic_subscriptions`).
 - **Empty keyword list:** disallowed (validation requires ≥1).
+- **Duplicate topic name:** enforced by `LOWER(name)` unique index; admin form surfaces the conflict.
 
 ### Deployment edge cases
 - **First boot:** `FetchFeedsJob` discovers 500 top stories, enqueues 500 `FetchStoryJob`s, drains in minutes.
@@ -307,7 +351,8 @@ When a user creates a new topic, run MatchJob logic against the last ~24 h of st
 **Stack:** RSpec + VCR + WebMock + Capybara (for one E2E).
 
 ### Unit tests
-- `Topic` validations: keyword cap, topic cap, webhook URL format, ≥1 keyword.
+- `Topic` validations: keyword cap, ≥1 keyword, unique name (case-insensitive), name/keywords presence.
+- `TopicSubscription` validations: webhook URL format, 50-subscription cap per user, unique `(user_id, topic_id)`.
 - `Story.archive!` under each of the 3 archive conditions.
 - `VelocityCalculator` service: rolling points/hour, edge cases (single snapshot → nil, gaps).
 - `KeywordMatcher` service: case-insensitive, safe against SQL special chars, matches across title/url/text.
@@ -320,12 +365,14 @@ When a user creates a new topic, run MatchJob logic against the last ~24 h of st
 
 ### Request specs
 - Devise sign-up/login.
-- Topic CRUD.
+- `TopicsController#index` — catalog view with subscription state.
+- `TopicSubscriptionsController` — subscribe, update (webhook / pause), unsubscribe; 50-per-user limit enforced.
+- `Admin::TopicsController` — admin CRUD (no destroy); regular users redirected off admin routes.
 - Dashboard: correct Inertia props; dismiss/mark-posted endpoints.
 - Web Push subscribe/unsubscribe endpoints.
 
 ### System test
-- One Capybara + headless Chrome happy path: sign up → create topic → trigger fake matching story → dashboard shows match → mark as posted → removed from default view.
+- One Capybara + headless Chrome happy path: admin signs in → creates topic → regular user signs up → subscribes → trigger fake matching story → dashboard shows match → mark as posted → removed from default view.
 
 ### External API handling
 - VCR cassettes for OpenAI + HN, scrubbed of keys, committed to repo. No real external calls in CI.
