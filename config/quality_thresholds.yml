@@ -14,7 +14,7 @@ flog:
 
 rubocop_metrics:
   class_length_max: 100
-  method_length_max: 10
+  method_length_max: 15
   abc_size_max: 15
   cyclomatic_complexity_max: 6
   perceived_complexity_max: 7

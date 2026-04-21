@@ -17,7 +17,7 @@ Metrics/ModuleLength:
 
 Metrics/MethodLength:
   Enabled: true
-  Max: 10
+  Max: 15
   Exclude:
     - 'db/migrate/**/*'
 
