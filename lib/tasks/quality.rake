@@ -58,7 +58,7 @@ namespace :quality do
     thresholds = YAML.load_file(Rails.root.join("config/quality_thresholds.yml"))
 
     report = Quality::Report.new(measurements: measurements, thresholds: thresholds)
-    puts report.to_s
+    puts report
     puts ""
     puts "Detailed reports:"
     puts "  #{QUALITY_DIR.join('overview.html')}    (RubyCritic)"
