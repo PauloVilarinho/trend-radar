@@ -21,17 +21,17 @@ Source plan: `../2026-04-17-plan-1-foundation.md` (the master). This directory s
 | 5 | [Configure TailwindCSS + style Devise views](task-05-tailwind-config.md) | DONE (`fa6a4ba`) |
 | 6 | [Dashboard placeholder page + routes (TDD)](task-06-dashboard-page.md) | DONE (`adb9b73`) |
 | 7 | [Topic model (shared catalog) with validations (TDD)](task-07-topic-model.md) | DONE (`2c561b4`) |
-| 7b | [Add `admin` flag to users + `require_admin!` gate](task-07b-add-admin-to-users.md) | pending |
+| 7b | [Add `admin` flag to users + `require_admin!` gate](task-07b-add-admin-to-users.md) | DONE (`2c561b4`) — gate covered via admin/topics request spec instead of standalone probe |
 | 8 | [PushSubscription model (TDD)](task-08-push-subscription-model.md) | DONE (`2c561b4`) |
-| 8b | [TopicSubscription join model (TDD)](task-08b-topic-subscription-model.md) | pending |
-| 9 | [Topics catalog index page (read-only)](task-09-topics-index.md) | pending (redone for shared-topics model) |
-| 10 | [TopicSubscription flow (subscribe/update/unsubscribe)](task-10-topic-subscription-flow.md) | pending (redone for shared-topics model) |
-| 11 | [Admin topic CRUD (`Admin::TopicsController`)](task-11-topic-edit.md) | pending (redone for shared-topics model) |
-| 12 | [AppLayout admin nav link](task-12-topic-destroy.md) | pending (redone for shared-topics model) |
-| 13 | [SolidQueue setup](task-13-solid-queue.md) | pending |
+| 8b | [TopicSubscription join model (TDD)](task-08b-topic-subscription-model.md) | DONE (`2c561b4`) |
+| 9 | [Topics catalog index page (read-only)](task-09-topics-index.md) | DONE (`433b0ec`) |
+| 10 | [TopicSubscription flow (subscribe/update/unsubscribe)](task-10-topic-subscription-flow.md) | DONE (`433b0ec`) |
+| 11 | [Admin topic CRUD (`Admin::TopicsController`)](task-11-topic-edit.md) | DONE (`433b0ec`) |
+| 12 | [AppLayout admin nav link](task-12-topic-destroy.md) | DONE (`433b0ec`) |
+| 13 | [SolidQueue setup](task-13-solid-queue.md) | DONE (`05aa5d3`) — installed by Rails 8 bootstrap (queue_schema, db config, adapter set in production) |
 | ~~14~~ | ~~Kamal deployment config~~ | **SKIPPED** (no Docker) |
-| 15 | [CI pipeline (GitHub Actions)](task-15-ci.md) | pending |
-| 16 | [Seed data for manual verification](task-16-seeds.md) | pending |
+| 15 | [CI pipeline (GitHub Actions)](task-15-ci.md) | **REMOVED** (`f1bf54f`) — workflow shipped then removed at user's request |
+| 16 | [Seed data for manual verification](task-16-seeds.md) | DONE (`bd2bd1c`) — seeds admin, user, sample topics (no subscription seed; minor divergence from plan) |
 | 17 | [System smoke test: admin + subscription flow](task-17-system-test.md) | pending |
 
 The file name `task-12-topic-destroy.md` is kept for file-system stability, but the task's purpose is now the AppLayout nav link (see the file header).
