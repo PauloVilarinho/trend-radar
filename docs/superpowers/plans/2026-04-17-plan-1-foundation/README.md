@@ -20,7 +20,7 @@ Source plan: `../2026-04-17-plan-1-foundation.md` (the master). This directory s
 | 4 | [Install Inertia.js + React](task-04-inertia-react.md) | DONE (`de1b91c`) |
 | 5 | [Configure TailwindCSS + style Devise views](task-05-tailwind-config.md) | DONE (`fa6a4ba`) |
 | 6 | [Dashboard placeholder page + routes (TDD)](task-06-dashboard-page.md) | DONE (`adb9b73`) |
-| 7 | [Topic model (shared catalog) with validations (TDD)](task-07-topic-model.md) | pending (redone for shared-topics model) |
+| 7 | [Topic model (shared catalog) with validations (TDD)](task-07-topic-model.md) | DONE (`2c561b4`) |
 | 7b | [Add `admin` flag to users + `require_admin!` gate](task-07b-add-admin-to-users.md) | pending |
 | 8 | [PushSubscription model (TDD)](task-08-push-subscription-model.md) | pending |
 | 8b | [TopicSubscription join model (TDD)](task-08b-topic-subscription-model.md) | pending |
