@@ -32,7 +32,7 @@ Source plan: `../2026-04-17-plan-1-foundation.md` (the master). This directory s
 | ~~14~~ | ~~Kamal deployment config~~ | **SKIPPED** (no Docker) |
 | 15 | [CI pipeline (GitHub Actions)](task-15-ci.md) | **REMOVED** (`f1bf54f`) — workflow shipped then removed at user's request |
 | 16 | [Seed data for manual verification](task-16-seeds.md) | DONE (`bd2bd1c`) — seeds admin, user, sample topics (no subscription seed; minor divergence from plan) |
-| 17 | [System smoke test: admin + subscription flow](task-17-system-test.md) | pending |
+| 17 | [System smoke test: admin + subscription flow](task-17-system-test.md) | DONE (`8b754ef`) — `have_content` swapped for `page.body include` (Inertia renders into JSON props, not visible DOM) |
 
 The file name `task-12-topic-destroy.md` is kept for file-system stability, but the task's purpose is now the AppLayout nav link (see the file header).
 
