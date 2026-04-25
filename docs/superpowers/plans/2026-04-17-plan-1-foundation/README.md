@@ -22,7 +22,7 @@ Source plan: `../2026-04-17-plan-1-foundation.md` (the master). This directory s
 | 6 | [Dashboard placeholder page + routes (TDD)](task-06-dashboard-page.md) | DONE (`adb9b73`) |
 | 7 | [Topic model (shared catalog) with validations (TDD)](task-07-topic-model.md) | DONE (`2c561b4`) |
 | 7b | [Add `admin` flag to users + `require_admin!` gate](task-07b-add-admin-to-users.md) | pending |
-| 8 | [PushSubscription model (TDD)](task-08-push-subscription-model.md) | pending |
+| 8 | [PushSubscription model (TDD)](task-08-push-subscription-model.md) | DONE (`2c561b4`) |
 | 8b | [TopicSubscription join model (TDD)](task-08b-topic-subscription-model.md) | pending |
 | 9 | [Topics catalog index page (read-only)](task-09-topics-index.md) | pending (redone for shared-topics model) |
 | 10 | [TopicSubscription flow (subscribe/update/unsubscribe)](task-10-topic-subscription-flow.md) | pending (redone for shared-topics model) |
