@@ -7,7 +7,7 @@ QUALITY_DIR = Rails.root.join("tmp/quality")
 MUTANT_SUBJECTS = %w[
   User* Topic* PushSubscription* TopicSubscription* TopicIndexProps*
   ApplicationController* DashboardController* TopicsController*
-  TopicSubscriptionsController* Admin* Quality*
+  TopicSubscriptionsController* Admin* Quality* TrackingConfig*
 ].freeze
 
 namespace :quality do

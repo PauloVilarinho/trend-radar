@@ -1,0 +1,12 @@
+velocity_candidate_threshold:
+  points_per_hour: 15
+  minimum_score: 30
+archive:
+  hard_cutoff_hours: 72
+  cooling_age_hours: 12
+  cooling_points_per_hour: 3
+  flat_snapshots_required: 3
+match:
+  min_relevance_score: 0.6
+  daily_classification_budget: 500
+snapshot_retention_days: 7
