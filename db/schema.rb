@@ -10,9 +10,40 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_04_27_143440) do
+ActiveRecord::Schema[8.0].define(version: 2026_04_27_143639) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
+
+  create_table "matches", force: :cascade do |t|
+    t.bigint "story_id", null: false
+    t.bigint "topic_id", null: false
+    t.decimal "relevance_score", precision: 4, scale: 3
+    t.text "reason"
+    t.decimal "velocity_score", precision: 8, scale: 2
+    t.datetime "matched_at", null: false
+    t.datetime "dismissed_at"
+    t.datetime "posted_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["story_id", "topic_id"], name: "index_matches_on_story_id_and_topic_id", unique: true
+    t.index ["story_id"], name: "index_matches_on_story_id"
+    t.index ["topic_id", "matched_at"], name: "index_matches_on_topic_id_and_matched_at"
+    t.index ["topic_id"], name: "index_matches_on_topic_id"
+  end
+
+  create_table "notifications", force: :cascade do |t|
+    t.bigint "match_id", null: false
+    t.string "channel", null: false
+    t.string "target_type", null: false
+    t.bigint "target_id", null: false
+    t.string "status", default: "pending", null: false
+    t.datetime "sent_at"
+    t.text "error"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["match_id", "channel", "target_type", "target_id"], name: "index_notifications_on_match_channel_target", unique: true
+    t.index ["match_id"], name: "index_notifications_on_match_id"
+  end
 
   create_table "push_subscriptions", force: :cascade do |t|
     t.bigint "user_id", null: false
@@ -94,6 +125,9 @@ ActiveRecord::Schema[8.0].define(version: 2026_04_27_143440) do
     t.index ["reset_password_token"], name: "index_users_on_reset_password_token", unique: true
   end
 
+  add_foreign_key "matches", "stories"
+  add_foreign_key "matches", "topics"
+  add_foreign_key "notifications", "matches"
   add_foreign_key "push_subscriptions", "users"
   add_foreign_key "story_snapshots", "stories"
   add_foreign_key "topic_subscriptions", "topics", on_delete: :cascade
