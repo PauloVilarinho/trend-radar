@@ -10,7 +10,7 @@ MUTANT_SUBJECTS = %w[
   TopicSubscriptionsController* Admin* Quality* TrackingConfig*
   Story* StorySnapshot* Match* Notification* VelocityCalculator*
   KeywordMatcher* Hn* FetchStoryJob* FetchFeedsJob* MatchJob*
-  StoryArchiver* StoryFlatlineDetector*
+  StoryArchiver* StoryFlatlineDetector* Openai*
 ].freeze
 
 namespace :quality do
