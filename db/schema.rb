@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_04_27_143144) do
+ActiveRecord::Schema[8.0].define(version: 2026_04_27_143440) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -45,6 +45,17 @@ ActiveRecord::Schema[8.0].define(version: 2026_04_27_143144) do
     t.index ["hn_id"], name: "index_stories_on_hn_id", unique: true
     t.index ["last_polled_at"], name: "index_stories_on_last_polled_at"
     t.index ["tracking_status"], name: "index_stories_on_active", where: "((tracking_status)::text = 'active'::text)"
+  end
+
+  create_table "story_snapshots", force: :cascade do |t|
+    t.bigint "story_id", null: false
+    t.integer "score", null: false
+    t.integer "descendants", default: 0, null: false
+    t.datetime "captured_at", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["story_id", "captured_at"], name: "index_story_snapshots_on_story_id_and_captured_at"
+    t.index ["story_id"], name: "index_story_snapshots_on_story_id"
   end
 
   create_table "topic_subscriptions", force: :cascade do |t|
@@ -84,6 +95,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_04_27_143144) do
   end
 
   add_foreign_key "push_subscriptions", "users"
+  add_foreign_key "story_snapshots", "stories"
   add_foreign_key "topic_subscriptions", "topics", on_delete: :cascade
   add_foreign_key "topic_subscriptions", "users", on_delete: :cascade
   add_foreign_key "topics", "users", column: "created_by_id", on_delete: :nullify
