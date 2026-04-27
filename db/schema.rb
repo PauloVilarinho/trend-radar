@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_04_21_142740) do
+ActiveRecord::Schema[8.0].define(version: 2026_04_27_143144) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -24,6 +24,27 @@ ActiveRecord::Schema[8.0].define(version: 2026_04_21_142740) do
     t.datetime "updated_at", null: false
     t.index ["user_id", "endpoint"], name: "index_push_subscriptions_on_user_id_and_endpoint", unique: true
     t.index ["user_id"], name: "index_push_subscriptions_on_user_id"
+  end
+
+  create_table "stories", force: :cascade do |t|
+    t.bigint "hn_id", null: false
+    t.string "title"
+    t.string "url"
+    t.string "by"
+    t.integer "score", default: 0, null: false
+    t.integer "descendants", default: 0, null: false
+    t.string "story_type"
+    t.text "text"
+    t.datetime "hn_created_at"
+    t.datetime "first_seen_at"
+    t.datetime "last_polled_at"
+    t.string "tracking_status", default: "active", null: false
+    t.datetime "archived_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["hn_id"], name: "index_stories_on_hn_id", unique: true
+    t.index ["last_polled_at"], name: "index_stories_on_last_polled_at"
+    t.index ["tracking_status"], name: "index_stories_on_active", where: "((tracking_status)::text = 'active'::text)"
   end
 
   create_table "topic_subscriptions", force: :cascade do |t|

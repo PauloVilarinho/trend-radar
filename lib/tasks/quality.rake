@@ -8,6 +8,7 @@ MUTANT_SUBJECTS = %w[
   User* Topic* PushSubscription* TopicSubscription* TopicIndexProps*
   ApplicationController* DashboardController* TopicsController*
   TopicSubscriptionsController* Admin* Quality* TrackingConfig*
+  Story*
 ].freeze
 
 namespace :quality do
