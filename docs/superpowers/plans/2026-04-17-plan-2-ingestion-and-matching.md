@@ -4,6 +4,8 @@
 
 **2026-04-20 amendment:** topics are now a shared catalog, so classification is per (story, topic) rather than per (story, user, topic). `BackfillTopicJob` is renamed `BackfillSubscriptionJob` and fires on `TopicSubscription#create` (not `Topic#create`). Dashboard queries use `current_user.subscribed_topics` instead of `current_user.topics`.
 
+**2026-04-27 amendment — persist all classifications:** `MatchJob` always inserts a `Match` row for every (story, topic) pair it classifies, even when the OpenAI relevance score is below threshold. This makes `Match.exists?(story_id:, topic_id:)` a complete idempotency record, so a story that re-triggers `MatchJob` after a velocity spike will skip pairs it already paid OpenAI for — including rejects. Behavioral implications: `Match.visible` now also filters by `relevance_score >= TrackingConfig.match[:min_relevance_score]`; `NotifyJob.perform_later` is only fired when the score clears the threshold; the Task 11 spec for "score below threshold" no longer asserts `not_to change(Match, :count)` — it asserts a Match is created but `NotifyJob` is not enqueued. Also: the daily-budget guard in `MatchJob#within_daily_budget?` uses strict `<` (not `<=`) so a configured budget of `0` correctly skips classification entirely.
+
 **Goal:** Build the data pipeline that polls Hacker News, stores stories with time-series snapshots, detects climbing velocity, matches stories against the shared topic catalog via keyword prefilter + OpenAI classification, and surfaces matches on an in-app dashboard. At the end of this plan, a logged-in user subscribed to at least one topic sees matching climbing HN stories on the dashboard.
 
 **Architecture:** Five job classes form the pipeline — `FetchFeedsJob` (every 5/30 min) → `FetchStoryJob` (per-item upsert + snapshot + archival + candidate decision) → `MatchJob` (keyword prefilter → OpenAI classification → match creation, scoped to ALL active topics — no user scoping). A `PruneSnapshotsJob` keeps the snapshots table bounded. `BackfillSubscriptionJob` seeds new subscribers against recent stories / existing matches. Dashboard is a new Inertia page with dismiss / mark-as-posted actions.
@@ -449,7 +451,7 @@ RSpec.describe Match, type: :model do
     expect(dup).not_to be_valid
   end
 
-  it "is visible when not dismissed and not posted" do
+  it "is visible when not dismissed and not posted and above threshold" do
     m = create(:match)
     expect(Match.visible).to include(m)
   end
@@ -461,6 +463,11 @@ RSpec.describe Match, type: :model do
 
   it "is hidden when posted" do
     m = create(:match, posted_at: Time.current)
+    expect(Match.visible).not_to include(m)
+  end
+
+  it "is hidden when relevance_score is below threshold (rejected classification)" do
+    m = create(:match, relevance_score: 0.4)
     expect(Match.visible).not_to include(m)
   end
 end
@@ -564,7 +571,11 @@ class Match < ApplicationRecord
   validates :matched_at, presence: true
   validates :story_id, uniqueness: { scope: :topic_id }
 
-  scope :visible, -> { where(dismissed_at: nil, posted_at: nil) }
+  scope :visible, lambda {
+    threshold = TrackingConfig.match[:min_relevance_score]
+    where(dismissed_at: nil, posted_at: nil)
+      .where("relevance_score >= ?", threshold)
+  }
   scope :recent, -> { order(matched_at: :desc) }
 end
 ```
@@ -1548,17 +1559,30 @@ RSpec.describe MatchJob, type: :job do
       expect(match.velocity_score).to be > 0
     end
 
-    it "does NOT create a Match when score below threshold" do
-      stub_matcher(score: 0.4)
+    it "still creates a Match when score below threshold (so we don't reclassify) but does NOT enqueue NotifyJob" do
+      stub_matcher(score: 0.4, reason: "Tangentially related")
 
-      expect { MatchJob.new.perform(story.id) }.not_to change(Match, :count)
+      expect { MatchJob.new.perform(story.id) }.to change(Match, :count).by(1)
+      expect(NotifyJob).not_to have_been_enqueued
+
+      match = Match.last
+      expect(match.relevance_score).to eq(0.4)
     end
 
-    it "is idempotent — does not duplicate a match on re-run" do
-      stub_matcher(score: 0.8)
+    it "is idempotent — does not duplicate a match (or re-classify) on re-run, regardless of score" do
+      matcher = stub_matcher(score: 0.8)
       MatchJob.new.perform(story.id)
 
       expect { MatchJob.new.perform(story.id) }.not_to change(Match, :count)
+      expect(matcher).to have_received(:call).once
+    end
+
+    it "does not re-classify a (story, topic) that was previously rejected" do
+      matcher = stub_matcher(score: 0.4)
+      MatchJob.new.perform(story.id)
+
+      expect { MatchJob.new.perform(story.id) }.not_to change(Match, :count)
+      expect(matcher).to have_received(:call).once
     end
 
     it "classifies once per topic regardless of subscriber count" do
@@ -1651,8 +1675,6 @@ class MatchJob < ApplicationJob
       result = matcher.call(story: story, topic: topic)
       record_classification
 
-      next if result[:score] < threshold
-
       match = Match.create!(
         story: story,
         topic: topic,
@@ -1661,7 +1683,7 @@ class MatchJob < ApplicationJob
         velocity_score: current_velocity(story),
         matched_at: Time.current,
       )
-      NotifyJob.perform_later(match.id)
+      NotifyJob.perform_later(match.id) if result[:score] >= threshold
     rescue ActiveRecord::RecordNotUnique
       next
     end
@@ -1676,7 +1698,7 @@ class MatchJob < ApplicationJob
 
   def within_daily_budget?
     budget = TrackingConfig.match[:daily_classification_budget]
-    today_count <= budget
+    today_count < budget
   end
 
   def record_classification
