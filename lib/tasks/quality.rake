@@ -11,6 +11,7 @@ MUTANT_SUBJECTS = %w[
   Story* StorySnapshot* Match* Notification* VelocityCalculator*
   KeywordMatcher* Hn* FetchStoryJob* FetchFeedsJob* MatchJob*
   StoryArchiver* StoryFlatlineDetector* Openai* NotifyJob*
+  BackfillSubscriptionJob*
 ].freeze
 
 namespace :quality do
