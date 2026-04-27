@@ -4,7 +4,10 @@ class TopicSubscriptionsController < ApplicationController
       topic_id: params[:topic_id],
       **subscription_params.to_h.symbolize_keys
     )
-    return redirect_to topics_path, notice: "Subscribed." if subscription.save
+    if subscription.save
+      BackfillSubscriptionJob.perform_later(subscription.id)
+      return redirect_to topics_path, notice: "Subscribed."
+    end
 
     render_index_with_errors(subscription)
   end
