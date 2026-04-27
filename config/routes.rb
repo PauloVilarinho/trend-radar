@@ -15,6 +15,9 @@ Rails.application.routes.draw do
     root "topics#index"
     resources :topics, except: [ :destroy, :show ]
   end
+
+  post "matches/:id/mark_posted", to: "matches#mark_posted", as: :mark_posted_match
+  post "matches/:id/dismiss", to: "matches#dismiss", as: :dismiss_match
   # Define your application routes per the DSL in https://guides.rubyonrails.org/routing.html
 
   # Reveal health status on /up that returns 200 if the app boots with no exceptions, otherwise 500.
