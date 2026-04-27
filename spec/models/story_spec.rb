@@ -33,6 +33,16 @@ RSpec.describe Story, type: :model do
     end
   end
 
+  describe "#archived?" do
+    it "is true when tracking_status is archived" do
+      expect(build(:story, tracking_status: "archived").archived?).to be true
+    end
+
+    it "is false on an active story" do
+      expect(build(:story).archived?).to be false
+    end
+  end
+
   describe "#archive!" do
     it "sets status and timestamp" do
       story = create(:story)

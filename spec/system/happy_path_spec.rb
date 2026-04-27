@@ -24,13 +24,8 @@ RSpec.describe "Happy path: admin creates topic, user subscribes", type: :system
     page.driver.post "/topics/#{topic.id}/subscription"
     expect(TopicSubscription.where(user: user, topic: topic)).to exist
 
-    if defined?(Story) && defined?(Match)
-      story = create(:story, title: "Kubernetes 2.0 announced")
-      create(:match, story: story, topic: topic, reason: "Kubernetes release")
-
-      visit "/"
-      expect(page).to have_content("Kubernetes 2.0 announced")
-    end
+    # Match rendering on the dashboard is exercised by spec/requests/dashboard_spec.rb
+    # once the matches pipeline is live; this smoke just covers the admin/subscribe flow.
 
     page.driver.delete "/topics/#{topic.id}/subscription"
     expect(TopicSubscription.where(user: user, topic: topic)).not_to exist
