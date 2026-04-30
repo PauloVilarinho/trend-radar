@@ -13,3 +13,5 @@ rubocop_metrics:
   perceived_complexity_max: 7
 mutation:
   kill_ratio_min: 69.46
+brakeman:
+  warnings_max: 0

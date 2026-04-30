@@ -77,4 +77,25 @@ RSpec.describe Quality::Report do
     expect(output).to include("Quality gates", "Line coverage")
     expect(output).to include("#{report.gate_results.size}/#{report.gate_results.size} gates passed")
   end
+
+  it "passes the brakeman gate when warnings are within the threshold" do
+    measurements = passing_measurements.merge(brakeman: { warnings: 0 })
+    open_thresholds = thresholds.merge("brakeman" => { "warnings_max" => 0 })
+
+    report = described_class.new(measurements: measurements, thresholds: open_thresholds)
+
+    brakeman_row = report.gate_results.find { |r| r.name == "Brakeman warnings" }
+    expect(brakeman_row.passed?).to be true
+  end
+
+  it "fails the brakeman gate when warnings exceed the threshold" do
+    measurements = passing_measurements.merge(brakeman: { warnings: 3 })
+    bad_thresholds = thresholds.merge("brakeman" => { "warnings_max" => 0 })
+
+    report = described_class.new(measurements: measurements, thresholds: bad_thresholds)
+
+    brakeman_row = report.gate_results.find { |r| r.name == "Brakeman warnings" }
+    expect(brakeman_row.passed?).to be false
+    expect(report.passed?).to be false
+  end
 end

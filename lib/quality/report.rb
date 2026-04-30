@@ -9,7 +9,8 @@ module Quality
       { name: "Method length max",        measure: [ :rubocop, :method_length_max ],           threshold: [ "rubocop_metrics", "method_length_max" ],       cmp: :<=, unit: "" },
       { name: "AbcSize max",              measure: [ :rubocop, :abc_size_max ],                threshold: [ "rubocop_metrics", "abc_size_max" ],            cmp: :<=, unit: "" },
       { name: "CyclomaticComplexity max", measure: [ :rubocop, :cyclomatic_complexity_max ],   threshold: [ "rubocop_metrics", "cyclomatic_complexity_max" ], cmp: :<=, unit: "" },
-      { name: "Mutation kill ratio",      measure: [ :mutation, :kill_ratio ],                 threshold: [ "mutation", "kill_ratio_min" ],                 cmp: :>=, unit: "%" }
+      { name: "Mutation kill ratio",      measure: [ :mutation, :kill_ratio ],                 threshold: [ "mutation", "kill_ratio_min" ],                 cmp: :>=, unit: "%" },
+      { name: "Brakeman warnings",        measure: [ :brakeman, :warnings ],                   threshold: [ "brakeman", "warnings_max" ],                   cmp: :<=, unit: "" }
     ].freeze
 
     attr_reader :gate_results
