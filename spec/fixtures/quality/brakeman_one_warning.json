@@ -1,0 +1,22 @@
+{
+  "scan_info": { "app_path": "/app", "rails_version": "8.0.5" },
+  "warnings": [
+    {
+      "warning_type": "SQL Injection",
+      "warning_code": 0,
+      "fingerprint": "abc123",
+      "check_name": "SQL",
+      "message": "Possible SQL injection",
+      "file": "app/controllers/example_controller.rb",
+      "line": 42,
+      "link": "https://brakemanscanner.org/docs/warning_types/sql_injection/",
+      "code": "User.where(\"name = '#{params[:name]}'\")",
+      "render_path": null,
+      "location": { "type": "method", "class": "ExampleController", "method": "index" },
+      "user_input": "params[:name]",
+      "confidence": "Medium"
+    }
+  ],
+  "errors": [],
+  "obsolete": []
+}
