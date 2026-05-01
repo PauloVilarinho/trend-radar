@@ -11,7 +11,7 @@ class TopicIndexProps
   end
 
   def call
-    subscriptions_by_topic = @user.topic_subscriptions.index_by(&:topic_id)
+    subscriptions_by_topic = TopicSubscription.where(user_id: @user.id).index_by(&:topic_id)
     {
       topics: Topic.where(active: true).order(:name).map { |t|
         topic_props(t, subscriptions_by_topic[t.id])

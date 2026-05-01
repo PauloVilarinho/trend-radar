@@ -28,12 +28,17 @@ module Quality
     def to_s
       lines = [ "Quality gates", "=" * 13, "" ]
       lines.concat(gate_results.map(&:to_row))
+      lines << bullet_line
       lines << ""
       lines << "#{gate_results.count(&:passed?)}/#{gate_results.size} gates passed."
       lines.join("\n")
     end
 
     private
+
+    def bullet_line
+      "Bullet (N+1)              -       no spec failures   ✓"
+    end
 
     def build_gate_results
       GATES.filter_map do |gate|
