@@ -25,8 +25,8 @@ class TopicSubscription < ApplicationRecord
   end
 
   def validate_per_user_limit
-    return unless user
-    if user.topic_subscriptions.count >= MAX_SUBSCRIPTIONS_PER_USER
+    return unless user_id
+    if TopicSubscription.where(user_id: user_id).count >= MAX_SUBSCRIPTIONS_PER_USER
       errors.add(:base, "subscription limit of #{MAX_SUBSCRIPTIONS_PER_USER} reached")
     end
   end

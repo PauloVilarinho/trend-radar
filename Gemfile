@@ -62,6 +62,8 @@ group :development, :test do
   gem "rubycritic", require: false
   gem "flog", require: false
   gem "mutant-rspec", require: false
+
+  gem "bullet"
 end
 
 group :test do

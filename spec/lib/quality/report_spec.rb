@@ -98,4 +98,12 @@ RSpec.describe Quality::Report do
     expect(brakeman_row.passed?).to be false
     expect(report.passed?).to be false
   end
+
+  it "renders an informational Bullet row" do
+    report = described_class.new(measurements: passing_measurements, thresholds: thresholds)
+
+    output = report.to_s
+
+    expect(output).to include("Bullet (N+1)", "no spec failures", "✓")
+  end
 end
