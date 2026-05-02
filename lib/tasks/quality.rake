@@ -69,9 +69,13 @@ namespace :quality do
       coverage: Quality::CoverageParser.new(QUALITY_DIR.join("coverage.json")).parse,
       rubocop: Quality::RubocopParser.new(QUALITY_DIR.join("rubocop.json")).parse,
       flog: JSON.parse(File.read(QUALITY_DIR.join("flog.json")), symbolize_names: true),
-      mutation: JSON.parse(File.read(QUALITY_DIR.join("mutation.json")), symbolize_names: true),
       brakeman: Quality::BrakemanParser.new(QUALITY_DIR.join("brakeman.json")).parse
     }
+    mutation_path = QUALITY_DIR.join("mutation.json")
+    if mutation_path.exist?
+      measurements[:mutation] = JSON.parse(File.read(mutation_path), symbolize_names: true)
+    end
+
     thresholds = YAML.load_file(Rails.root.join("config/quality_thresholds.yml"))
 
     report = Quality::Report.new(measurements: measurements, thresholds: thresholds)
@@ -132,7 +136,26 @@ def ratchet_brakeman_if_unset!(warnings)
   puts "[quality:brakeman] Ratchet set: brakeman.warnings_max = #{warnings}"
 end
 
-desc "Run all quality gates: coverage, rubocop, critic, flog, mutation, brakeman, report"
+namespace :quality do
+  desc "Remove stale mutation.json so :report skips the mutation row in local runs"
+  task :clean_mutation_artifact do
+    path = QUALITY_DIR.join("mutation.json")
+    path.delete if path.exist?
+  end
+
+  desc "Fast local quality gate (everything except mutation testing). ~15s runtime."
+  task local: %w[
+    quality:clean_mutation_artifact
+    quality:coverage
+    quality:rubocop
+    quality:critic
+    quality:flog
+    quality:brakeman
+    quality:report
+  ]
+end
+
+desc "Full quality gate including mutation testing. ~3min runtime — used by CI."
 task quality: %w[
   quality:coverage
   quality:rubocop
