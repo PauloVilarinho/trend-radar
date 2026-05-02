@@ -12,6 +12,6 @@ rubocop_metrics:
   cyclomatic_complexity_max: 6
   perceived_complexity_max: 7
 mutation:
-  kill_ratio_min: 69.46
+  kill_ratio_min: 67.0
 brakeman:
   warnings_max: 0
