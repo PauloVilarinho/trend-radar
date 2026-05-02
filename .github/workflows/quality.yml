@@ -1,13 +1,11 @@
 name: Quality
 
 on:
-  push:
   pull_request:
 
-# A push to a branch with an open PR fires both `push` and `pull_request`.
-# This concurrency group dedupes them — the latest run wins, in-progress is cancelled.
+# Cancel any in-progress run on the same PR when a new commit lands.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref }}
   cancel-in-progress: true
 
 jobs:
@@ -36,6 +34,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
@@ -44,6 +56,9 @@ jobs:
 
       - name: Set up database
         run: bin/rails db:schema:load
+
+      - name: Build vite assets for tests
+        run: bin/vite build
 
       - name: Run full quality gate (includes mutation testing)
         run: bin/rake quality
