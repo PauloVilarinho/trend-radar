@@ -62,3 +62,11 @@ jobs:
 
       - name: Run full quality gate (includes mutation testing)
         run: bin/rake quality
+
+      - name: Upload quality artifacts (mutation.txt etc.) for inspection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-artifacts
+          path: tmp/quality/
+          retention-days: 14
