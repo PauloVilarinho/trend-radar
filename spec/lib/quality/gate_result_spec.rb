@@ -26,7 +26,7 @@ RSpec.describe Quality::GateResult do
     expect(result.to_row).to include("Flog max method", "22", "<=", "15", "✗")
   end
 
-  it "treats a nil threshold as a passing, unset ratchet" do
+  it "treats a nil threshold as passing and renders an unset row" do
     result = described_class.new(
       name: "Mutation kill ratio",
       measured: 88.0,
@@ -36,6 +36,6 @@ RSpec.describe Quality::GateResult do
     )
 
     expect(result.passed?).to be true
-    expect(result.to_row).to include("Mutation kill ratio", "88.0%", "(unset)", "ratchet pending")
+    expect(result.to_row).to include("Mutation kill ratio", "88.0%", "(unset)", "threshold pending")
   end
 end

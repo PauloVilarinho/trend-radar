@@ -22,7 +22,7 @@ module Quality
       name_col = name.ljust(26)
       measured_col = format_value(measured).ljust(8)
 
-      return "#{name_col}#{measured_col}(unset)      — [ratchet pending]" if threshold.nil?
+      return "#{name_col}#{measured_col}(unset)      — [threshold pending]" if threshold.nil?
 
       threshold_col = "#{COMPARATOR_SYMBOLS.fetch(comparator)} #{format_value(threshold)}".ljust(12)
       "#{name_col}#{measured_col}#{threshold_col}#{passed? ? '✓' : '✗'}"

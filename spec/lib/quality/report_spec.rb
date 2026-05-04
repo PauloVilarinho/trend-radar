@@ -49,7 +49,7 @@ RSpec.describe Quality::Report do
     expect(failing.map(&:name)).to eq([ "Class length max" ])
   end
 
-  it "treats the ratcheted mutation threshold as passing when still unset" do
+  it "treats a nil mutation threshold as passing while still unset" do
     open_thresholds = thresholds.deep_dup
     open_thresholds["mutation"]["kill_ratio_min"] = nil
 

@@ -50,16 +50,16 @@ namespace :quality do
     File.write(QUALITY_DIR.join("flog.json"), JSON.pretty_generate(result))
   end
 
-  desc "Run Brakeman; emit JSON to tmp/quality/brakeman.json; ratchet warnings_max on first run"
+  desc "Run Brakeman; emit JSON to tmp/quality/brakeman.json; set warnings_max threshold on first run"
   task brakeman: :environment do
     FileUtils.mkdir_p(QUALITY_DIR)
     out_path = QUALITY_DIR.join("brakeman.json")
     # Brakeman exits non-zero when warnings exist; we capture output and let the report decide.
-    sh "bundle exec brakeman --format json --confidence-level 2 --no-pager " \
+    sh "bundle exec brakeman --format json --confidence-level 1 --no-pager " \
        "-o #{out_path.to_s.shellescape} || true"
 
     parsed = Quality::BrakemanParser.new(out_path).parse
-    ratchet_brakeman_if_unset!(parsed[:warnings])
+    set_brakeman_threshold_if_unset!(parsed[:warnings])
   end
 
   desc "Aggregate all measurements; print gate table; exit 0 on pass, 1 on fail"
@@ -90,7 +90,7 @@ namespace :quality do
     exit(report.passed? ? 0 : 1)
   end
 
-  desc "Run Mutant against app/ and lib/quality; ratchet threshold on first run"
+  desc "Run Mutant against app/ and lib/quality; set threshold on first run"
   task mutation: :environment do
     FileUtils.mkdir_p(QUALITY_DIR)
     txt_path = QUALITY_DIR.join("mutation.txt")
@@ -107,11 +107,11 @@ namespace :quality do
     parsed = Quality::MutantParser.new(txt_path).parse
     File.write(QUALITY_DIR.join("mutation.json"), JSON.pretty_generate(parsed))
 
-    ratchet_if_unset!(parsed[:kill_ratio])
+    set_mutation_threshold_if_unset!(parsed[:kill_ratio])
   end
 end
 
-def ratchet_if_unset!(kill_ratio)
+def set_mutation_threshold_if_unset!(kill_ratio)
   require "yaml"
   path = Rails.root.join("config/quality_thresholds.yml")
   thresholds = YAML.load_file(path)
@@ -120,10 +120,10 @@ def ratchet_if_unset!(kill_ratio)
 
   thresholds["mutation"]["kill_ratio_min"] = kill_ratio
   File.write(path, thresholds.to_yaml)
-  puts "[quality:mutation] Ratchet set: mutation.kill_ratio_min = #{kill_ratio}"
+  puts "[quality:mutation] Threshold set: mutation.kill_ratio_min = #{kill_ratio}"
 end
 
-def ratchet_brakeman_if_unset!(warnings)
+def set_brakeman_threshold_if_unset!(warnings)
   require "yaml"
   path = Rails.root.join("config/quality_thresholds.yml")
   thresholds = YAML.load_file(path)
@@ -133,7 +133,7 @@ def ratchet_brakeman_if_unset!(warnings)
 
   thresholds["brakeman"]["warnings_max"] = warnings
   File.write(path, thresholds.to_yaml)
-  puts "[quality:brakeman] Ratchet set: brakeman.warnings_max = #{warnings}"
+  puts "[quality:brakeman] Threshold set: brakeman.warnings_max = #{warnings}"
 end
 
 namespace :quality do
