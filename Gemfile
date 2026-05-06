@@ -82,4 +82,4 @@ group :development do
   gem "foreman"
 end
 
-gem "vite_rails", "~> 3.10"
+gem "vite_rails", "~> 3.11"
